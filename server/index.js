@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
+import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, spawnPose } from './avatar.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
@@ -33,6 +34,8 @@ function socketIp(socket) {
   return forwarded.at(-1).trim() || socket.handshake.address;
 }
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
+// Three.js (ห้อง 3D) เสิร์ฟจาก node_modules เอง — ไม่พึ่ง CDN ภายนอก
+app.use('/vendor/three', express.static(fileURLToPath(new URL('../node_modules/three/build', import.meta.url)), { maxAge: '7d' }));
 
 // จำกัด /api/* ต่อ IP (กันยิงค้นจนโควต้า YouTube ทั้งวันหมด)
 const httpHits = new Map(); // ip → { windowStart, count }
@@ -76,7 +79,7 @@ app.get('/api/resolve', async (req, res) => {
 const httpServer = createServer(app);
 const io = new Server(httpServer);
 
-// rooms: roomId → { state, users: Map<socketId, name>, cleanupTimer, event, fillingFor, chat, chatSeq }
+// rooms: roomId → { state, users: Map<socketId, {name, look, pose}>, cleanupTimer, event, fillingFor, chat, chatSeq }
 const rooms = new Map();
 const AUTO_ADDED_BY = 'ต่อให้อัตโนมัติ';
 const LOBBY_LIMIT = 20;
@@ -98,7 +101,11 @@ app.get('/api/rooms', (_req, res) => {
 
 // event = "ใครทำอะไรล่าสุด" ให้หน้าเว็บเด้งข้อความบอกคนอื่น (ไม่ใช่ส่วนของ reducer เพราะเป็นแค่การแจ้งเตือน)
 const snapshot = (room) => ({ ...room.state, event: room.event ?? null, serverTime: Date.now() });
-const userList = (room) => [...room.users.values()];
+const userList = (room) => [...room.users.values()].map((user) => user.name);
+const avatarOf = (id, user) => ({ id, name: user.name, look: user.look, pose: user.pose });
+const avatarList = (room) => [...room.users.entries()].map(([id, user]) => avatarOf(id, user));
+const POSE_LIMIT_PER_SEC = 15;
+const GESTURE_LIMIT_PER_SEC = 4;
 
 function describeEvent(action, actor, seq, state) {
   const event = { seq, type: action.type, by: actor.name, bySocket: actor.socketId };
@@ -202,6 +209,9 @@ io.on('connection', (socket) => {
   let userName = '';
   const allow = createRateLimiter();
   const allowChat = createChatLimiter();
+  const allowPose = createPerSecondLimiter(POSE_LIMIT_PER_SEC);
+  const allowGesture = createPerSecondLimiter(GESTURE_LIMIT_PER_SEC);
+  const me = () => roomId && rooms.get(roomId)?.users.get(socket.id);
 
   // ใช้ให้หน้าเว็บวัดว่านาฬิกาเครื่องตัวเองต่างจาก server เท่าไร
   socket.on('time', (ack) => typeof ack === 'function' && allow() && ack(Date.now()));
@@ -215,10 +225,12 @@ io.on('connection', (socket) => {
 
     roomId = requested;
     userName = cleanName(payload?.name);
-    room.users.set(socket.id, userName);
+    const user = { name: userName, look: cleanLook(payload?.look), pose: spawnPose() };
+    room.users.set(socket.id, user);
     socket.join(roomId);
-    ack({ state: snapshot(room), users: userList(room), chat: room.chat });
+    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), you: socket.id });
     socket.to(roomId).emit('users', userList(room));
+    socket.to(roomId).emit('avatar:join', avatarOf(socket.id, user));
   });
 
   socket.on('action', (raw) => {
@@ -243,11 +255,33 @@ io.on('connection', (socket) => {
     return reply({ ok: true });
   });
 
+  // ห้อง 3D: ตำแหน่งส่งแบบ volatile (หลุดบางแพ็กเก็ตได้ ตัวถัดไปมาแทน) · ท่าทาง/หน้าตาส่งปกติ
+  socket.on('pose', (raw) => {
+    const user = me();
+    const pose = user && allowPose(Date.now()) && cleanPose(raw);
+    if (!pose) return;
+    user.pose = pose;
+    socket.to(roomId).volatile.emit('pose', { id: socket.id, ...pose });
+  });
+
+  socket.on('gesture', (raw) => {
+    const type = me() && allowGesture(Date.now()) && cleanGesture(raw);
+    if (type) socket.to(roomId).emit('gesture', { id: socket.id, type });
+  });
+
+  socket.on('look', (raw) => {
+    const user = me();
+    if (!user || !allowGesture(Date.now())) return;
+    user.look = cleanLook(raw);
+    socket.to(roomId).emit('avatar:look', { id: socket.id, look: user.look });
+  });
+
   socket.on('disconnect', () => {
     const room = roomId && rooms.get(roomId);
     if (!room) return;
     room.users.delete(socket.id);
     io.to(roomId).emit('users', userList(room));
+    io.to(roomId).emit('avatar:leave', { id: socket.id });
     if (room.users.size === 0) {
       const id = roomId;
       room.cleanupTimer = setTimeout(() => rooms.delete(id), EMPTY_ROOM_TTL_MS);

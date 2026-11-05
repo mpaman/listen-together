@@ -330,7 +330,7 @@ export function setGateLink(text, isError) {
 export function renderLobby(rooms, onPick) {
   const list = $('lobby');
   list.replaceChildren();
-  $('lobby-label').hidden = rooms.length === 0;
+  $('lobby-empty').hidden = rooms.length > 0;
   for (const room of rooms) {
     const btn = el('button', 'lobby-room');
     btn.type = 'button';

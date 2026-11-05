@@ -87,6 +87,25 @@ img {
 .disc-lg { width: 96px; height: 96px; }
 body.is-playing .disc { animation: spin 3.6s linear infinite; }
 
+/* ---------- ตัวแทนห้อง: ใบหน้า spider chok (pixel art ต้องไม่เบลอ) ---------- */
+.brand-mark, .screen-mark, .gate-logo { image-rendering: pixelated; display: block; }
+.brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px; /* ซ้อนกับกรอบ 1px แล้วเท่ากับ ~10px */
+  box-shadow: 0 0 0 1px var(--line-strong), 0 2px 10px rgba(224, 69, 58, 0.25);
+}
+.screen-mark {
+  width: 112px;
+  height: 112px;
+  border-radius: 24px;
+  box-shadow: 0 0 0 1px var(--line-strong), 0 12px 40px rgba(224, 69, 58, 0.28);
+}
+.gate-logo { border-radius: 18px; box-shadow: 0 0 0 1px var(--line-strong); }
+@keyframes mark-bob { 50% { transform: translateY(-2px); } }
+body.is-playing .brand-mark { animation: mark-bob 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { body.is-playing .brand-mark { animation: none; } }
+
 /* ---------- top bar ---------- */
 .topbar {
   display: flex;
@@ -737,7 +756,7 @@ body.is-playing .ctrl-main .icon-pause { opacity: 1; transform: none; filter: no
 
 /* ---------- จอแคบ ---------- */
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
   .panel { position: static; max-height: none; }
   .pane-chat { height: min(60vh, 480px); min-height: 0; }
   .now { min-height: 0; }
@@ -777,3 +796,143 @@ body.is-playing .ctrl-main .icon-pause { opacity: 1; transform: none; filter: no
 @media (hover: none) {
   .drag-handle { opacity: 1; } /* มือถือไม่มี hover → โชว์ที่จับตลอด */
 }
+
+/* ---------- ปุ่มกลับหน้าหลัก ---------- */
+a.brand { color: inherit; text-decoration: none; border-radius: 10px; }
+a.room-btn { text-decoration: none; }
+.home-btn { color: var(--text); }
+
+/* ---------- ห้องนั่งเล่น 3D ---------- */
+.lounge { margin-top: 28px; }
+.lounge[hidden] { display: none; }
+.lounge-view {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-screen);
+  overflow: hidden;
+  background: #161213;
+  box-shadow: 0 0 0 1px var(--line), 0 24px 60px -24px rgba(0, 0, 0, 0.9);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.lounge-view:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.lounge-view canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; } /* absolute: ขนาดจริงของ canvas จะได้ไม่ดันคอลัมน์ให้กว้างเกินจอ */
+.lounge-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.lounge-help {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(18, 16, 17, 0.7);
+  color: var(--muted);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+@media (hover: none) { .lounge-keys { display: none; } }
+@media (max-width: 520px) { .lounge-view { aspect-ratio: 4 / 3; } } /* มือถือ: สูงขึ้น ตัวละครไม่เล็กเกิน */
+
+/* ป้ายเหนือหัว: วางที่จุดหัวตัวละคร (translate จาก JS) แล้วเลื่อนขึ้นให้ฐานป้ายอยู่ตรงหัว */
+.lounge-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  translate: -50% -100%; /* ฐานป้าย (ชื่อ) อยู่ตรงหัว · bubble/emoji ซ้อนขึ้นไปด้านบน */
+  will-change: transform;
+}
+.lounge-name {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(18, 16, 17, 0.72);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.lounge-tag.is-me .lounge-name { color: var(--amber); }
+.lounge-bubble {
+  position: relative;
+  max-width: 200px;
+  width: max-content;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: #f4ede4;
+  color: #1a1410;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.6);
+}
+.lounge-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 2px;
+}
+.lounge-emote { font-size: 1.6rem; line-height: 1; }
+.lounge-bubble[hidden], .lounge-emote[hidden] { display: none; }
+.is-pop { animation: bubble-pop 260ms var(--ease-out); }
+@keyframes bubble-pop { from { opacity: 0; scale: 0.6; } }
+
+.lounge-bar { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.lounge-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.act, .emo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  transition: transform var(--t-fast) ease-out, background-color var(--t-fast) ease-out, border-color var(--t-fast) ease-out;
+}
+.act { padding: 0 14px 0 12px; font-size: 1rem; color: var(--text); }
+.act span { font-size: 0.82rem; color: var(--muted); }
+.emo { justify-content: center; width: 38px; color: var(--muted); }
+.act .icon, .emo .icon { width: 18px; height: 18px; }
+.emo:hover { color: var(--text); }
+.emo[data-gesture="love"]:hover { color: var(--coral); }
+.emo[data-gesture="party"]:hover, .emo[data-gesture="clap"]:hover { color: var(--amber); }
+.act:hover, .emo:hover { background: var(--surface-2); border-color: var(--line-strong); }
+.act:active, .emo:active { transform: scale(0.9); }
+.act-sep { width: 1px; height: 22px; margin: 0 4px; background: var(--line-strong); }
+.reroll { margin-left: auto; }
+.say-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+.say-form input { flex: 1; min-width: 0; height: 38px; border: 0; background: none; outline: none; }
+.say-form:focus-within { border-color: var(--amber); }
+.say-form .chat-send { color: var(--amber); }
+
+/* ---------- หน้าหลัก (minimal) ---------- */
+.gate.is-home {
+  background:
+    radial-gradient(700px 420px at 50% -10%, rgba(224, 69, 58, 0.14), transparent 70%),
+    var(--bg);
+  backdrop-filter: none;
+}
+.gate-card { align-items: stretch; gap: 10px; }
+.gate.is-home .gate-card { background: transparent; border-color: transparent; box-shadow: none; }
+.gate-logo { align-self: center; outline: none; animation: dangle 3.2s ease-in-out infinite; transform-origin: 50% 0; }
+.gate-card h2 { text-align: center; margin-bottom: 8px; }
+.lobby-empty { margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed var(--line-strong); color: var(--faint); font-size: 0.82rem; text-align: center; }
+.lobby-empty[hidden] { display: none; }
+.lobby { max-height: 240px; }
+.gate-link:empty { display: none; }
+@keyframes dangle { 50% { transform: rotate(4deg) translateY(2px); } }

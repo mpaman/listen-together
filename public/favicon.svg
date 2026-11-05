@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- spider chok: แมงมุมแดงใส่หูฟัง ห้อยใยลงมา (วาดเอง) -->
+  <path d="M32 0v14" stroke="#a39a92" stroke-width="1.6"/>
+  <g fill="none" stroke="#1d191a" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19 30 9 22 4 27"/><path d="M18 36 7 34 3 40"/><path d="M19 42 9 46 6 53"/><path d="M22 47 15 55 15 61"/>
+    <path d="M45 30 55 22 60 27"/><path d="M46 36 57 34 61 40"/><path d="M45 42 55 46 58 53"/><path d="M42 47 49 55 49 61"/>
+  </g>
+  <circle cx="32" cy="38" r="16" fill="#e0453a"/>
+  <path d="M15.5 33a16.5 16.5 0 0 1 33 0" fill="none" stroke="#f2a541" stroke-width="3.2" stroke-linecap="round"/>
+  <rect x="12" y="31" width="6" height="10" rx="3" fill="#f2a541"/>
+  <rect x="46" y="31" width="6" height="10" rx="3" fill="#f2a541"/>
+  <circle cx="26" cy="37" r="5" fill="#fff"/><circle cx="38" cy="37" r="5" fill="#fff"/>
+  <circle cx="27" cy="38" r="2.4" fill="#1d191a"/><circle cx="39" cy="38" r="2.4" fill="#1d191a"/>
+  <path d="M28.5 45q3.5 3 7 0" fill="none" stroke="#1d191a" stroke-width="2" stroke-linecap="round"/>
+</svg>

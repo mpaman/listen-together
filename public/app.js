@@ -6,10 +6,12 @@ import { createPlayer } from './player.js';
 import { isRoomId, normalizeRoomId, suggestRoomName } from './room-name.js';
 import { createSyncer, currentItem, expectedPosition } from './sync.js';
 import { createQueueDrag } from './queue-drag.js';
+import { randomLook } from './lounge-avatar.js';
 import * as ui from './ui.js';
 
 const TICK_MS = 400;
 const NAME_KEY = 'listen-together:name';
+const LOOK_KEY = 'listen-together:look';
 const IN_SYNC_SEC = 0.3;
 const DRIFT_SMOOTHING = 0.3; // ค่าที่โชว์บนป้ายเฉลี่ยแบบนุ่ม จะได้ไม่กระพริบทุก tick
 const $ = (id) => document.getElementById(id);
@@ -34,6 +36,27 @@ let unread = 0;
 const mySocketIds = new Set();
 const isMine = (msg) => mySocketIds.has(msg.bySocket);
 const CHAT_TOAST_LEN = 60;
+let lounge = null; // ห้อง 3D (null = เครื่องนี้เปิด WebGL ไม่ได้ → ใช้แบบไม่มีห้อง 3D)
+let myLook = loadLook();
+
+function loadLook() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOOK_KEY));
+    if (saved && typeof saved === 'object') return saved; // server กรองค่าซ้ำอีกชั้น
+  } catch {
+    // ไม่มี/อ่านไม่ได้ → สุ่มใหม่
+  }
+  return saveLook(randomLook());
+}
+
+function saveLook(look) {
+  try {
+    localStorage.setItem(LOOK_KEY, JSON.stringify(look));
+  } catch {
+    // จำไม่ได้ก็แค่ได้ตัวใหม่ทุกครั้ง
+  }
+  return look;
+}
 
 // ---------- ห้อง ----------
 function roomFromUrl() {
@@ -53,9 +76,10 @@ function enterRoom(id) {
 const send = (action) => joined && socket.emit('action', action);
 
 function join() {
-  socket.emit('join', { room: roomId, name: $('gate-name').value }, (res) => {
+  socket.emit('join', { room: roomId, name: $('gate-name').value, look: myLook }, (res) => {
     if (res?.error) return ui.toast(res.error);
     joined = true;
+    lounge?.reset(res.avatars ?? [], res.you);
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
     renderUsers(res.users);
@@ -74,6 +98,7 @@ function applyState(next, force = false) {
   renderQueue();
   ui.renderNowPlaying(room);
   ui.renderMode(room.whenEmpty);
+  lounge?.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
   syncer?.reconcile(room, clock.serverNow());
 }
 
@@ -98,11 +123,17 @@ socket.on('state', (state) => applyState(state));
 const renderUsers = (users) => ui.renderUsers(users, $('gate-name').value.trim());
 socket.on('users', renderUsers);
 socket.on('chat', onChat);
+socket.on('avatar:join', (av) => lounge?.add(av));
+socket.on('avatar:leave', ({ id }) => lounge?.remove(id));
+socket.on('avatar:look', ({ id, look }) => lounge?.look(id, look));
+socket.on('pose', (pose) => lounge?.pose(pose));
+socket.on('gesture', ({ id, type }) => lounge?.remoteGesture(id, type));
 
 // ---------- แชท ----------
 function onChat(msg) {
   const mine = isMine(msg);
   ui.appendChatMessage(msg, mine);
+  lounge?.say(msg.bySocket, msg.text);
   if (mine || (activeTab === 'chat' && !document.hidden)) return;
   unread += 1;
   ui.setUnread(unread);
@@ -140,16 +171,52 @@ function bindChat() {
   document.addEventListener('visibilitychange', () => !document.hidden && activeTab === 'chat' && showTab('chat'));
   $('chat-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const input = $('chat-input');
-    const text = input.value.trim();
-    if (!text || !joined) return;
-    input.value = '';
-    socket.emit('chat', text, (res) => {
-      if (!res?.error) return;
-      if (!input.value) input.value = text; // ส่งไม่ผ่าน → คืนข้อความให้ ไม่ต้องพิมพ์ใหม่
-      ui.toast(res.error);
-    });
+    sendChat($('chat-input'));
   });
+}
+
+// ช่องแชท กับ ช่อง "พูด" ใต้ห้อง 3D ส่งข้อความเดียวกัน (ขึ้นบนหัว + ในแชท)
+function sendChat(input) {
+  const text = input.value.trim();
+  if (!text || !joined) return;
+  input.value = '';
+  socket.emit('chat', text, (res) => {
+    if (!res?.error) return;
+    if (!input.value) input.value = text; // ส่งไม่ผ่าน → คืนข้อความให้ ไม่ต้องพิมพ์ใหม่
+    ui.toast(res.error);
+  });
+}
+
+// ---------- ห้อง 3D ----------
+// โหลดแยก (dynamic import) — ถ้า WebGL/Three.js พัง เว็บฟังเพลงยังใช้ได้ปกติ
+async function initLounge() {
+  try {
+    const { createLounge } = await import('./lounge.js');
+    lounge = createLounge($('lounge'), {
+      onPose: (pose) => joined && socket.emit('pose', pose),
+      onGesture: (type) => joined && socket.emit('gesture', type),
+      onNotice: (text) => ui.toast(text),
+    });
+    if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
+  } catch (err) {
+    console.error('[lounge]', err);
+    $('lounge-section').hidden = true;
+    return;
+  }
+  for (const btn of document.querySelectorAll('.lounge-actions [data-gesture]')) {
+    btn.addEventListener('click', () => lounge.gesture(btn.dataset.gesture));
+  }
+  document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
+  $('reroll').addEventListener('click', () => {
+    myLook = saveLook(randomLook());
+    lounge.setMyLook(myLook);
+    if (joined) socket.emit('look', myLook);
+  });
+  $('say-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendChat($('say-input'));
+  });
+  if (room) lounge.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
 }
 
 // ---------- ตัวเล่น ----------
@@ -241,26 +308,49 @@ async function runSearch(text) {
 }
 
 // ---------- ผูกปุ่ม ----------
-// เปิดเว็บเปล่าๆ: ให้ตั้งชื่อห้องเอง + โชว์ห้องที่มีคนฟังอยู่ให้กดเข้า
+// หน้าหลัก (เปิดเว็บเปล่าๆ): รายการห้องที่เปิดอยู่ กดแล้วเข้าเลย + ช่องสร้างห้องใหม่
 function setupRoomPicker() {
   const input = $('gate-room-input');
   $('gate-room-field').hidden = false;
+  $('gate').classList.add('is-home');
+  $('gate-submit').textContent = 'สร้างห้อง';
   input.value = suggestRoomName();
   const preview = () => {
-    const id = normalizeRoomId(input.value);
-    ui.setGateLink(isRoomId(id) ? `ลิงก์ห้อง: ?room=${id}` : 'ชื่อห้องต้องมีตัวอักษรหรือตัวเลขอย่างน้อย 2 ตัว', !isRoomId(id));
+    const ok = isRoomId(normalizeRoomId(input.value));
+    ui.setGateLink(ok ? '' : 'ชื่อห้องต้องมีตัวอักษรหรือตัวเลขอย่างน้อย 2 ตัว', !ok);
   };
   input.addEventListener('input', preview);
   preview();
   getJson('/api/rooms')
     .then(({ rooms }) =>
       ui.renderLobby(rooms, (id) => {
-        input.value = id;
-        preview();
-        $('gate-name').focus();
+        if (!$('gate-name').value.trim()) {
+          input.value = id;
+          return $('gate-name').focus();
+        }
+        enterGate(id);
       }),
     )
-    .catch(() => {});
+    .catch(() => ui.renderLobby([], () => {}));
+}
+
+// ผ่านหน้าเข้าห้อง: จำชื่อ → ปลดเสียง (ต้องมาจากการกดของผู้ใช้) → join
+function enterGate(pickedId = null) {
+  if (!$('gate-name').value.trim()) return $('gate-name').focus();
+  if (!roomId) {
+    const id = normalizeRoomId(pickedId ?? $('gate-room-input').value);
+    if (!isRoomId(id)) return $('gate-room-input').focus();
+    enterRoom(id);
+  }
+  try {
+    localStorage.setItem(NAME_KEY, $('gate-name').value);
+  } catch {
+    // ไม่เป็นไร
+  }
+  player?.unmute();
+  $('gate').classList.add('is-leaving');
+  setTimeout(() => ($('gate').hidden = true), 200);
+  join();
 }
 
 function bindGate() {
@@ -277,20 +367,7 @@ function bindGate() {
   }
   $('gate-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    if (!roomId) {
-      const id = normalizeRoomId($('gate-room-input').value);
-      if (!isRoomId(id)) return $('gate-room-input').focus();
-      enterRoom(id);
-    }
-    try {
-      localStorage.setItem(NAME_KEY, $('gate-name').value);
-    } catch {
-      // ไม่เป็นไร
-    }
-    player?.unmute();
-    $('gate').classList.add('is-leaving');
-    setTimeout(() => ($('gate').hidden = true), 200);
-    join();
+    enterGate();
   });
 }
 
@@ -357,6 +434,7 @@ async function main() {
     onEnd: () => queueDirty && room && renderQueue(),
   });
   bindRoomLink();
+  initLounge();
   getJson('/api/config')
     .then((cfg) => {
       searchEnabled = cfg.searchEnabled;
