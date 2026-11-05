@@ -1,0 +1,17 @@
+# Render Blueprint — New → Blueprint → เลือก repo นี้ แล้ว Render จะสร้าง service ตามไฟล์นี้
+# docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: listen-with-chok
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/config
+    envVars:
+      # Render มี proxy คั่นหน้า → ให้ server อ่าน IP จริงจาก X-Forwarded-For (ใช้กับ rate limit)
+      - key: TRUST_PROXY
+        value: "1"
+      # sync: false = Render จะถามค่าตอนสร้าง (ใส่ key เองในหน้าเว็บ Render, ไม่เก็บใน repo)
+      - key: YOUTUBE_API_KEY
+        sync: false

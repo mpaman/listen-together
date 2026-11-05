@@ -1,0 +1,276 @@
+// หน้าเว็บหลัก: ต่อ socket → รับสถานะห้อง → ให้ sync.js คุมตัวเล่น → ให้ ui.js วาด
+// ทุกปุ่ม (play/pause/skip/เพิ่มเพลง) ไม่ได้สั่งตัวเล่นตรงๆ แต่ส่ง action ไป server
+// แล้วรอ server กระจายสถานะใหม่กลับมาให้ทุกเครื่อง (รวมเครื่องเราด้วย) → ทุกคนเห็นเหมือนกัน
+import { createClock } from './clock.js';
+import { createPlayer } from './player.js';
+import { isRoomId, normalizeRoomId, suggestRoomName } from './room-name.js';
+import { createSyncer, currentItem, expectedPosition } from './sync.js';
+import * as ui from './ui.js';
+
+const TICK_MS = 400;
+const NAME_KEY = 'listen-together:name';
+const IN_SYNC_SEC = 0.3;
+const DRIFT_SMOOTHING = 0.3; // ค่าที่โชว์บนป้ายเฉลี่ยแบบนุ่ม จะได้ไม่กระพริบทุก tick
+const $ = (id) => document.getElementById(id);
+
+let roomId = roomFromUrl(); // null = เปิดเว็บเปล่าๆ → ให้ตั้งชื่อห้อง/เลือกห้องในหน้าเข้าห้อง
+const socket = window.io({ autoConnect: true });
+const clock = createClock(socket);
+
+let room = null; // สถานะล่าสุดจาก server
+let joined = false;
+let player = null;
+let syncer = null;
+let isDragging = false;
+// กันส่ง 'ended' ซ้ำ: ผูกกับ id + refTime เพราะเพลงเดิมถูกสั่งเล่นใหม่ได้ (กด play หลังคิวจบ / วนคิว)
+let reportedEndKey = null;
+let lastEventSeq = 0;
+let smoothDrift = 0;
+let searchEnabled = false;
+
+// ---------- ห้อง ----------
+function roomFromUrl() {
+  const id = normalizeRoomId(new URLSearchParams(location.search).get('room'));
+  return isRoomId(id) ? id : null;
+}
+
+// ใส่ชื่อห้องลง URL ให้คัดลอกลิงก์ไปชวนเพื่อนได้ตรงห้อง
+function enterRoom(id) {
+  roomId = id;
+  const params = new URLSearchParams(location.search);
+  params.set('room', id);
+  history.replaceState(null, '', `${location.pathname}?${params}`);
+  $('room-id').textContent = id;
+}
+
+const send = (action) => joined && socket.emit('action', action);
+
+function join() {
+  socket.emit('join', { room: roomId, name: $('gate-name').value }, (res) => {
+    if (res?.error) return ui.toast(res.error);
+    joined = true;
+    lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
+    applyState(res.state, true);
+    ui.renderUsers(res.users);
+  });
+}
+
+function applyState(next, force = false) {
+  if (!force && room && next.version <= room.version) return; // ข้อความเก่ามาช้า → ทิ้ง
+  room = next;
+  const ev = room.event;
+  if (ev && ev.seq > lastEventSeq) {
+    lastEventSeq = ev.seq;
+    if (ev.bySocket !== socket.id) ui.toastEvent(ev); // ของที่เรากดเองไม่ต้องเด้งบอกตัวเอง
+  }
+  ui.renderQueue(room, { onJump: (id) => send({ type: 'jump', id }), onRemove: (id) => send({ type: 'remove', id }) });
+  ui.renderNowPlaying(room);
+  ui.renderMode(room.whenEmpty);
+  syncer?.reconcile(room, clock.serverNow());
+}
+
+socket.on('connect', () => joined && join()); // หลุดแล้วต่อใหม่ → server ลืมเราแล้ว ต้อง join ซ้ำ
+socket.on('state', (state) => applyState(state));
+socket.on('users', ui.renderUsers);
+
+// ---------- ตัวเล่น ----------
+// คืนเพลงปัจจุบัน เฉพาะเมื่อตัวเล่นเครื่องนี้โหลดเพลงนั้นอยู่จริง
+// (กัน event ของเพลงเก่าที่มาช้า ไปทำให้เพลงใหม่ถูกข้าม)
+function loadedCurrentItem() {
+  const item = room && currentItem(room);
+  return item && syncer?.loadedItemId() === item.id ? item : null;
+}
+
+function reportEnd() {
+  const item = loadedCurrentItem();
+  const key = item && `${item.id}:${room.refTime}`;
+  if (!item || !room.isPlaying || reportedEndKey === key) return;
+  reportedEndKey = key;
+  send({ type: 'ended', id: item.id });
+}
+
+function reportBlocked() {
+  const item = loadedCurrentItem();
+  if (item) send({ type: 'blocked', id: item.id });
+}
+
+async function initPlayer() {
+  player = await createPlayer('player', { onEnded: reportEnd, onBlocked: reportBlocked });
+  syncer = createSyncer(player);
+  // เปิด ?debug=1 แล้วพิมพ์ __lt.drift() ใน console เพื่อดูว่าเครื่องนี้คลาดจากห้องกี่วินาที
+  if (new URLSearchParams(location.search).has('debug')) {
+    window.__lt = {
+      drift: () => (room ? player.currentTime() - expectedPosition(room, clock.serverNow()) : null),
+      playerState: () => player.state(),
+    };
+  }
+}
+
+function updateSyncBadge(now) {
+  if (!socket.connected) return ui.renderSync('off', 'หลุดการเชื่อมต่อ…');
+  if (!currentItem(room)) return ui.renderSync('idle', 'รอเพลงแรก');
+  if (!room.isPlaying) return ui.renderSync('idle', 'พักเพลงอยู่');
+  const drift = player.currentTime() - expectedPosition(room, now);
+  smoothDrift += (drift - smoothDrift) * DRIFT_SMOOTHING;
+  const inSync = player.state() === player.states.PLAYING && Math.abs(smoothDrift) <= IN_SYNC_SEC;
+  if (inSync) return ui.renderSync('live', `ตรงกับห้อง ±${Math.abs(smoothDrift).toFixed(2)} วิ`);
+  return ui.renderSync('catching', 'กำลังตามห้อง…');
+}
+
+function tick() {
+  if (!room || !player || !joined) return;
+  const now = clock.serverNow();
+  syncer.reconcile(room, now);
+  // กันกรณีพลาด event ENDED (เช่นแท็บอยู่เบื้องหลัง) → ดูจากเวลาที่ควรจะเล่นถึงแทน
+  const duration = player.duration();
+  if (room.isPlaying && duration > 0 && expectedPosition(room, now) > duration + 1) reportEnd();
+  ui.renderProgress(room, duration, now, isDragging);
+  updateSyncBadge(now);
+}
+
+// ---------- ค้นเพลง ----------
+const looksLikeLink = (text) => /youtu\.?be|youtube\.com|^[A-Za-z0-9_-]{11}$/.test(text);
+
+async function getJson(url) {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? 'เกิดข้อผิดพลาด');
+  return body;
+}
+
+const addToQueue = (item) => send({ type: 'add', item: { videoId: item.videoId, title: item.title, channel: item.channel } });
+
+async function runSearch(text) {
+  const q = text.trim();
+  if (!q) return;
+  ui.setHint('กำลังค้น…');
+  try {
+    if (looksLikeLink(q)) {
+      const { item } = await getJson(`/api/resolve?u=${encodeURIComponent(q)}`);
+      ui.renderResults([item], 'จากลิงก์', addToQueue);
+    } else if (searchEnabled) {
+      const { results } = await getJson(`/api/search?q=${encodeURIComponent(q)}`);
+      ui.renderResults(results, `ผลการค้นหา “${q}”`, addToQueue);
+    } else {
+      throw new Error('ระบบค้นหายังไม่เปิด — คัดลอกลิงก์เพลงจาก YouTube Music มาวางแทน');
+    }
+    ui.setHint('');
+  } catch (err) {
+    ui.setPopover(false);
+    ui.setHint(err.message, true);
+  }
+}
+
+// ---------- ผูกปุ่ม ----------
+// เปิดเว็บเปล่าๆ: ให้ตั้งชื่อห้องเอง + โชว์ห้องที่มีคนฟังอยู่ให้กดเข้า
+function setupRoomPicker() {
+  const input = $('gate-room-input');
+  $('gate-room-field').hidden = false;
+  input.value = suggestRoomName();
+  const preview = () => {
+    const id = normalizeRoomId(input.value);
+    ui.setGateLink(isRoomId(id) ? `ลิงก์ห้อง: ?room=${id}` : 'ชื่อห้องต้องมีตัวอักษรหรือตัวเลขอย่างน้อย 2 ตัว', !isRoomId(id));
+  };
+  input.addEventListener('input', preview);
+  preview();
+  getJson('/api/rooms')
+    .then(({ rooms }) =>
+      ui.renderLobby(rooms, (id) => {
+        input.value = id;
+        preview();
+        $('gate-name').focus();
+      }),
+    )
+    .catch(() => {});
+}
+
+function bindGate() {
+  if (roomId) {
+    $('gate-title').textContent = `เข้าห้อง ${roomId}`;
+    enterRoom(roomId); // เขียน URL เป็นชื่อมาตรฐาน ("ห้อง แก๊งค์" → "ห้อง-แก๊งค์") ลิงก์ที่คัดลอกจะได้สะอาด
+  } else {
+    setupRoomPicker();
+  }
+  try {
+    $('gate-name').value = localStorage.getItem(NAME_KEY) ?? '';
+  } catch {
+    // บางโหมด (เช่น private) อ่าน localStorage ไม่ได้ → แค่จำชื่อไม่ได้
+  }
+  $('gate-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!roomId) {
+      const id = normalizeRoomId($('gate-room-input').value);
+      if (!isRoomId(id)) return $('gate-room-input').focus();
+      enterRoom(id);
+    }
+    try {
+      localStorage.setItem(NAME_KEY, $('gate-name').value);
+    } catch {
+      // ไม่เป็นไร
+    }
+    player?.unmute();
+    $('gate').classList.add('is-leaving');
+    setTimeout(() => ($('gate').hidden = true), 200);
+    join();
+  });
+}
+
+function bindTransport() {
+  $('btn-play').addEventListener('click', () => send({ type: room?.isPlaying ? 'pause' : 'play' }));
+  $('btn-next').addEventListener('click', () => send({ type: 'next' }));
+  $('btn-prev').addEventListener('click', () => send({ type: 'prev' }));
+  const seek = $('seek');
+  seek.addEventListener('input', () => {
+    isDragging = true;
+    seek.style.setProperty('--pct', `${Number(seek.value) / 10}%`);
+  });
+  seek.addEventListener('change', () => {
+    isDragging = false;
+    const duration = player?.duration() ?? 0;
+    if (duration > 0) send({ type: 'seek', position: (Number(seek.value) / 1000) * duration });
+  });
+  for (const btn of document.querySelectorAll('.segmented [data-mode]')) {
+    btn.addEventListener('click', () => send({ type: 'mode', mode: btn.dataset.mode }));
+  }
+}
+
+function bindSearch() {
+  $('search-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    runSearch($('search-input').value);
+  });
+  $('results-close').addEventListener('click', () => ui.setPopover(false));
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && ui.setPopover(false));
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.search-wrap')) ui.setPopover(false);
+  });
+}
+
+function bindRoomLink() {
+  $('copy-link').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(location.href.replace(/[?&]debug=1/, ''));
+      $('copy-hint').textContent = 'คัดลอกแล้ว';
+      setTimeout(() => ($('copy-hint').textContent = 'ชวนเพื่อน'), 1800);
+    } catch {
+      prompt('คัดลอกลิงก์นี้ส่งให้เพื่อน', location.href);
+    }
+  });
+}
+
+async function main() {
+  bindGate();
+  bindTransport();
+  bindSearch();
+  bindRoomLink();
+  getJson('/api/config')
+    .then((cfg) => {
+      searchEnabled = cfg.searchEnabled;
+      if (!searchEnabled) ui.setHint('ยังไม่มี API key: วางลิงก์จาก YouTube Music แทนได้');
+    })
+    .catch(() => {});
+  await initPlayer();
+  setInterval(tick, TICK_MS);
+}
+
+main();

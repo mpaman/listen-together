@@ -1,0 +1,243 @@
+// server ตัวเดียว: เสิร์ฟหน้าเว็บ (public/) + API ค้นเพลง + Socket.IO คุมสถานะห้อง
+import express from 'express';
+import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { Server } from 'socket.io';
+import { createRoomState, needsAutofill, reduce } from './room.js';
+import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
+import { resolveLink, search, suggest } from './youtube.js';
+
+const PORT = Number(process.env.PORT) || 3000;
+const API_KEY = process.env.YOUTUBE_API_KEY ?? '';
+const MAX_ROOMS = 100;
+const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
+const MAX_QUERY_LEN = 100;
+const RATE_LIMIT_PER_SEC = 10;
+
+const HTTP_LIMIT_PER_MIN = 30;
+const MAX_SOCKETS_PER_IP = 10;
+
+const app = express();
+app.disable('x-powered-by');
+
+// บน Render ทุก request ผ่าน proxy 1 ชั้น → IP ที่เห็นตรงๆ เป็นของ proxy (ทุกคนจะดูเป็นคนเดียวกัน)
+// TRUST_PROXY=1 = เชื่อ X-Forwarded-For ตัวขวาสุด (ตัวที่ proxy ของ Render เติมเอง ปลอมไม่ได้)
+// รันในเครื่องไม่ต้องตั้ง — ไม่งั้นใครก็ส่ง header ปลอมมาหลบ rate limit ได้
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+if (TRUST_PROXY) app.set('trust proxy', 1);
+
+function socketIp(socket) {
+  if (!TRUST_PROXY) return socket.handshake.address;
+  const forwarded = String(socket.handshake.headers['x-forwarded-for'] ?? '').split(',');
+  return forwarded.at(-1).trim() || socket.handshake.address;
+}
+app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
+
+// จำกัด /api/* ต่อ IP (กันยิงค้นจนโควต้า YouTube ทั้งวันหมด)
+const httpHits = new Map(); // ip → { windowStart, count }
+setInterval(() => httpHits.clear(), 10 * 60 * 1000).unref();
+app.use('/api', (req, res, next) => {
+  const now = Date.now();
+  const hit = httpHits.get(req.ip);
+  if (!hit || now - hit.windowStart >= 60_000) {
+    httpHits.set(req.ip, { windowStart: now, count: 1 });
+    return next();
+  }
+  hit.count += 1;
+  return hit.count > HTTP_LIMIT_PER_MIN ? res.status(429).json({ error: 'ค้นถี่เกินไป รอสักครู่' }) : next();
+});
+
+app.get('/api/config', (_req, res) => res.json({ searchEnabled: Boolean(API_KEY) }));
+
+app.get('/api/search', async (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  if (!q || q.length > MAX_QUERY_LEN) return res.status(400).json({ error: 'คำค้นว่างหรือยาวเกินไป' });
+  if (!API_KEY) return res.status(503).json({ error: 'ยังไม่ได้ตั้ง YOUTUBE_API_KEY — วางลิงก์เพลงแทนได้' });
+  try {
+    return res.json({ results: await search(q, API_KEY) });
+  } catch (err) {
+    console.error('[search]', err.message);
+    const quota = err.status === 403;
+    return res.status(quota ? 429 : 502).json({ error: quota ? 'โควต้าค้นหาวันนี้หมดแล้ว — วางลิงก์เพลงแทนได้' : 'ค้นหาไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/resolve', async (req, res) => {
+  try {
+    const item = await resolveLink(String(req.query.u ?? '').slice(0, 300));
+    return item ? res.json({ item }) : res.status(400).json({ error: 'ไม่ใช่ลิงก์ YouTube / YouTube Music' });
+  } catch (err) {
+    console.error('[resolve]', err.message);
+    return res.status(404).json({ error: 'หาเพลงจากลิงก์นี้ไม่เจอ' });
+  }
+});
+
+const httpServer = createServer(app);
+const io = new Server(httpServer);
+
+// rooms: roomId → { state, users: Map<socketId, name>, cleanupTimer, event, fillingFor }
+const rooms = new Map();
+const AUTO_ADDED_BY = 'ต่อให้อัตโนมัติ';
+const LOBBY_LIMIT = 20;
+
+// ห้องที่มีคนฟังอยู่ตอนนี้ (หน้าเข้าห้องใช้แสดงให้กดเข้าร่วม)
+// ⚠️ ใครเปิดเว็บก็เห็นชื่อห้อง — เหมาะกับใช้ในกลุ่มเพื่อน ถ้าจะเปิดสาธารณะให้ลบ route นี้
+app.get('/api/rooms', (_req, res) => {
+  const list = [...rooms.entries()]
+    .filter(([, room]) => room.users.size > 0)
+    .map(([id, room]) => ({
+      id,
+      listeners: room.users.size,
+      nowPlaying: room.state.queue.find((item) => item.id === room.state.currentId)?.title ?? null,
+    }))
+    .sort((a, b) => b.listeners - a.listeners)
+    .slice(0, LOBBY_LIMIT);
+  res.json({ rooms: list });
+});
+
+// event = "ใครทำอะไรล่าสุด" ให้หน้าเว็บเด้งข้อความบอกคนอื่น (ไม่ใช่ส่วนของ reducer เพราะเป็นแค่การแจ้งเตือน)
+const snapshot = (room) => ({ ...room.state, event: room.event ?? null, serverTime: Date.now() });
+const userList = (room) => [...room.users.values()];
+
+function describeEvent(action, actor, seq) {
+  const event = { seq, type: action.type, by: actor.name, bySocket: actor.socketId };
+  if (action.type === 'add') event.title = action.item.title;
+  if (action.type === 'autofill') event.count = action.items.length;
+  if (action.type === 'mode') event.mode = action.mode;
+  return event;
+}
+
+// จุดเดียวที่เปลี่ยนสถานะห้อง: reduce → จำ event → กระจายให้ทุกคน → เช็คว่าต้องเติมเพลงไหม
+function dispatch(roomId, room, action, actor) {
+  const next = reduce(room.state, action, Date.now());
+  if (next === room.state) return;
+  room.state = next;
+  room.event = describeEvent(action, actor, next.version);
+  io.to(roomId).emit('state', snapshot(room));
+  maybeAutofill(roomId, room);
+}
+
+// งบการเติมเพลง: ค้น 1 ครั้ง = 101 หน่วยจากโควต้าวันละ 10,000
+// ทุกครั้งที่มีคนเพิ่มเพลงในห้องว่างจะเรียกการเติมเพลง (ผ่าน socket ไม่ติด limit ของ /api) จึงต้องคุมแยก
+const AUTOFILL_ROOM_COOLDOWN_MS = 30_000;
+const AUTOFILL_DAILY_MAX = 40; // ~40% ของโควต้า เหลือให้คนค้นเอง
+const DAY_MS = 24 * 60 * 60 * 1000;
+const autofillLog = []; // เวลาที่เติมเพลง (ทั้ง server) ย้อนหลัง 24 ชม.
+
+function takeAutofillBudget(room, now) {
+  while (autofillLog.length && now - autofillLog[0] > DAY_MS) autofillLog.shift();
+  if (autofillLog.length >= AUTOFILL_DAILY_MAX) return false;
+  if (now - (room.lastFillAt ?? 0) < AUTOFILL_ROOM_COOLDOWN_MS) return false;
+  autofillLog.push(now);
+  room.lastFillAt = now;
+  return true;
+}
+
+// ระหว่างรอผลค้น ห้องอาจเปลี่ยนไปแล้ว (เปลี่ยนโหมด / เปลี่ยนเพลง / มีคนเพิ่มเพลงเอง) → เติมเฉพาะถ้ายังต้องเติมจริง
+const stillNeedsFill = (room, seedId) =>
+  room.state.whenEmpty === 'similar' && room.state.currentId === seedId && needsAutofill(room.state);
+
+// เล่นถึงเพลงสุดท้ายในคิว → ค้นเพลงแนวเดียวกันมาเติมล่วงหน้า (ไม่รอให้เงียบ)
+// fillingFor กันยิงซ้ำต่อเพลงเดิม (ทั้งตอนกำลังค้น และเมื่อค้นแล้วไม่เจอ) — ถ้าไม่ได้ผล ตอนจบเพลง reducer จะวนคิวแทน
+async function maybeAutofill(roomId, room) {
+  if (!API_KEY || !needsAutofill(room.state)) return;
+  const seed = room.state.queue.find((item) => item.id === room.state.currentId);
+  if (!seed || room.fillingFor === seed.id || !takeAutofillBudget(room, Date.now())) return;
+  room.fillingFor = seed.id;
+  try {
+    const picks = await suggest(seed, new Set(room.state.queue.map((item) => item.videoId)), API_KEY);
+    if (rooms.get(roomId) !== room || !stillNeedsFill(room, seed.id)) return;
+    const inQueue = new Set(room.state.queue.map((item) => item.videoId));
+    const items = picks.filter((p) => !inQueue.has(p.videoId)).map((p) => makeQueueItem(p, AUTO_ADDED_BY, true));
+    if (items.length === 0) return;
+    room.fillingFor = null; // เติมสำเร็จ → ถ้าคนลบเพลงที่เติมทิ้ง จะเติมใหม่ได้ (ยังติดงบ/cooldown)
+    dispatch(roomId, room, { type: 'autofill', items }, { name: AUTO_ADDED_BY, socketId: null });
+  } catch (err) {
+    console.error('[autofill]', err.message);
+  }
+}
+
+function getOrCreateRoom(roomId) {
+  let room = rooms.get(roomId);
+  if (!room) {
+    if (rooms.size >= MAX_ROOMS) return null;
+    room = { state: createRoomState(Date.now()), users: new Map(), cleanupTimer: null };
+    rooms.set(roomId, room);
+  }
+  clearTimeout(room.cleanupTimer);
+  return room;
+}
+
+// กันคนกดรัวๆ: แต่ละ socket ส่ง action ได้ไม่เกิน N ครั้งต่อวินาที
+function createRateLimiter() {
+  let windowStart = 0;
+  let count = 0;
+  return () => {
+    const now = Date.now();
+    if (now - windowStart >= 1000) {
+      windowStart = now;
+      count = 0;
+    }
+    count += 1;
+    return count <= RATE_LIMIT_PER_SEC;
+  };
+}
+
+const socketsPerIp = new Map();
+
+io.on('connection', (socket) => {
+  const ip = socketIp(socket);
+  const open = (socketsPerIp.get(ip) ?? 0) + 1;
+  if (open > MAX_SOCKETS_PER_IP) return socket.disconnect(true);
+  socketsPerIp.set(ip, open);
+  socket.on('disconnect', () => {
+    const left = (socketsPerIp.get(ip) ?? 1) - 1;
+    if (left <= 0) socketsPerIp.delete(ip);
+    else socketsPerIp.set(ip, left);
+  });
+
+  let roomId = null;
+  let userName = '';
+  const allow = createRateLimiter();
+
+  // ใช้ให้หน้าเว็บวัดว่านาฬิกาเครื่องตัวเองต่างจาก server เท่าไร
+  socket.on('time', (ack) => typeof ack === 'function' && allow() && ack(Date.now()));
+
+  socket.on('join', (payload, ack) => {
+    if (typeof ack !== 'function' || roomId || !allow()) return;
+    const requested = normalizeRoomId(payload?.room);
+    if (!isRoomId(requested)) return ack({ error: 'ชื่อห้องไม่ถูกต้อง' });
+    const room = getOrCreateRoom(requested);
+    if (!room) return ack({ error: 'ห้องเต็มแล้ว ลองใหม่ภายหลัง' });
+
+    roomId = requested;
+    userName = cleanName(payload?.name);
+    room.users.set(socket.id, userName);
+    socket.join(roomId);
+    ack({ state: snapshot(room), users: userList(room) });
+    socket.to(roomId).emit('users', userList(room));
+  });
+
+  socket.on('action', (raw) => {
+    const room = roomId && rooms.get(roomId);
+    if (!room || !allow()) return;
+    const action = sanitizeAction(raw, userName);
+    if (action) dispatch(roomId, room, action, { name: userName, socketId: socket.id });
+  });
+
+  socket.on('disconnect', () => {
+    const room = roomId && rooms.get(roomId);
+    if (!room) return;
+    room.users.delete(socket.id);
+    io.to(roomId).emit('users', userList(room));
+    if (room.users.size === 0) {
+      const id = roomId;
+      room.cleanupTimer = setTimeout(() => rooms.delete(id), EMPTY_ROOM_TTL_MS);
+    }
+  });
+});
+
+httpServer.listen(PORT, () => {
+  console.log(`🎧 listen-together พร้อมที่ http://localhost:${PORT}`);
+  if (!API_KEY) console.log('   (ยังไม่มี YOUTUBE_API_KEY — ค้นหาปิดอยู่ ใช้การวางลิงก์แทนได้)');
+});

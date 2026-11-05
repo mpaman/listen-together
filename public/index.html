@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>ฟังเพลงกับ chok</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Noto+Serif+Thai:wght@600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- ไอคอนทั้งหมดอยู่ที่นี่ที่เดียว แล้วอ้างด้วย <use href="#i-..."> -->
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.6v12.8a1 1 0 0 0 1.53.85l10.05-6.4a1 1 0 0 0 0-1.7L9.53 4.75A1 1 0 0 0 8 5.6z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect fill="currentColor" x="6.5" y="5" width="4" height="14" rx="1.2"/><rect fill="currentColor" x="13.5" y="5" width="4" height="14" rx="1.2"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><rect fill="currentColor" x="5" y="5.5" width="2.4" height="13" rx="1"/><path fill="currentColor" d="M19 6.6v10.8a1 1 0 0 1-1.55.83l-8.1-5.4a1 1 0 0 1 0-1.66l8.1-5.4A1 1 0 0 1 19 6.6z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><rect fill="currentColor" x="16.6" y="5.5" width="2.4" height="13" rx="1"/><path fill="currentColor" d="M5 6.6v10.8a1 1 0 0 0 1.55.83l8.1-5.4a1 1 0 0 0 0-1.66l-8.1-5.4A1 1 0 0 0 5 6.6z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></g></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 6v12M6 12h12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m6 12.5 4 4 8-9"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m7 7 10 10M17 7 7 17"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></g></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect fill="currentColor" x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11V9a3 3 0 0 1 3-3h12"/><path d="m16 3 3 3-3 3"/><path d="M20 13v2a3 3 0 0 1-3 3H5"/><path d="m8 21-3-3 3-3"/></g></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3.5c.5 3.9 2.6 6 6.5 6.5-3.9.5-6 2.6-6.5 6.5-.5-3.9-2.6-6-6.5-6.5 3.9-.5 6-2.6 6.5-6.5zM18.5 15c.25 1.7 1.05 2.5 2.75 2.75-1.7.25-2.5 1.05-2.75 2.75-.25-1.7-1.05-2.5-2.75-2.75 1.7-.25 2.5-1.05 2.75-2.75z"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="disc" aria-hidden="true"></span>
+      <span class="brand-name">ฟังเพลงกับ <em>chok</em></span>
+    </div>
+    <div class="topbar-end">
+      <span class="sync" id="sync" data-state="off" role="status">
+        <span class="sync-dot" aria-hidden="true"></span>
+        <span id="sync-text">กำลังเชื่อมต่อ…</span>
+      </span>
+      <ul class="avatars" id="avatars" aria-label="คนที่ฟังอยู่"></ul>
+      <button class="room-btn" id="copy-link" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>
+        <span>ห้อง <strong id="room-id"></strong></span>
+        <span class="room-btn-hint" id="copy-hint">ชวนเพื่อน</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage" aria-labelledby="now-title">
+      <div class="screen">
+        <div id="player"></div>
+        <!-- บังไม่ให้คลิกตัวเล่นตรงๆ: ทุกคำสั่งต้องผ่านปุ่มของห้อง จะได้ sync ทุกคน -->
+        <div class="screen-shield" aria-hidden="true"></div>
+        <div class="screen-empty" id="screen-empty">
+          <span class="disc disc-lg" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <div class="now">
+        <p class="eyebrow" id="now-eyebrow">ยังไม่มีเพลง</p>
+        <h1 id="now-title" class="now-title">ห้องยังเงียบอยู่</h1>
+        <p id="now-sub" class="now-sub">ค้นเพลงแล้วกด + เพื่อเริ่ม</p>
+      </div>
+
+      <div class="transport">
+        <div class="progress">
+          <span id="t-now" class="time">0:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0" aria-label="ตำแหน่งเพลง" />
+          <span id="t-total" class="time time-end">0:00</span>
+        </div>
+        <div class="controls">
+          <button class="ctrl" id="btn-prev" type="button" aria-label="เพลงก่อนหน้า">
+            <svg class="icon" aria-hidden="true"><use href="#i-prev"/></svg>
+          </button>
+          <button class="ctrl ctrl-main" id="btn-play" type="button" aria-label="เล่น">
+            <svg class="icon icon-play" aria-hidden="true"><use href="#i-play"/></svg>
+            <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause"/></svg>
+          </button>
+          <button class="ctrl" id="btn-next" type="button" aria-label="เพลงถัดไป">
+            <svg class="icon" aria-hidden="true"><use href="#i-next"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="ค้นเพลงและคิว">
+      <div class="search-wrap">
+        <form class="search" id="search-form" autocomplete="off" role="search">
+          <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="search-input" type="search" placeholder="ชื่อเพลง ศิลปิน หรือวางลิงก์" maxlength="300" aria-label="ค้นเพลง" />
+          <button type="submit" class="search-go">ค้น</button>
+        </form>
+        <div class="popover" id="results-pop" hidden>
+          <div class="popover-head">
+            <span id="results-label">ผลการค้นหา</span>
+            <button class="icon-btn" id="results-close" type="button" aria-label="ปิดผลการค้นหา">
+              <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+            </button>
+          </div>
+          <ul class="list" id="results"></ul>
+        </div>
+        <p class="hint" id="search-hint" role="status"></p>
+      </div>
+
+      <div class="queue-head">
+        <h2>คิวเพลง</h2>
+        <span id="queue-count" class="count"></span>
+      </div>
+
+      <div class="when-empty">
+        <span class="when-empty-label" id="mode-label">เมื่อคิวหมด</span>
+        <div class="segmented" role="radiogroup" aria-labelledby="mode-label">
+          <button type="button" role="radio" data-mode="similar" aria-checked="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg>แนวเดียวกัน
+          </button>
+          <button type="button" role="radio" data-mode="loop" aria-checked="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-repeat"/></svg>วนคิว
+          </button>
+          <button type="button" role="radio" data-mode="stop" aria-checked="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>หยุด
+          </button>
+        </div>
+      </div>
+
+      <ol class="list queue" id="queue"></ol>
+    </aside>
+  </main>
+
+  <ol class="toasts" id="toasts" aria-live="polite"></ol>
+
+  <div class="gate" id="gate">
+    <form class="gate-card" id="gate-form">
+      <span class="disc disc-lg" aria-hidden="true"></span>
+      <h2 id="gate-title">ฟังเพลงกับ chok</h2>
+      <p class="gate-note">กดเข้าร่วมหนึ่งครั้ง browser ถึงจะยอมเปิดเสียง</p>
+
+      <!-- โชว์เฉพาะตอนเปิดเว็บโดยไม่มีลิงก์ห้อง -->
+      <div class="gate-room" id="gate-room-field" hidden>
+        <label for="gate-room-input">ชื่อห้อง</label>
+        <input id="gate-room-input" maxlength="40" autocomplete="off" spellcheck="false" />
+        <p class="gate-link" id="gate-link"></p>
+        <p class="lobby-label" id="lobby-label" hidden>ห้องที่มีคนฟังอยู่</p>
+        <ul class="lobby" id="lobby"></ul>
+      </div>
+
+      <label for="gate-name">ชื่อที่เพื่อนจะเห็น</label>
+      <input id="gate-name" maxlength="24" placeholder="เช่น Man" required autocomplete="nickname" />
+      <button type="submit" class="btn-primary">เข้าร่วมฟัง</button>
+    </form>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
