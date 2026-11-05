@@ -104,6 +104,16 @@ function markBlocked(state, id, now) {
   return goNext({ ...state, queue }, now);
 }
 
+// ย้ายเพลงไปลำดับ to (นับจาก 0 ในคิวหลังย้าย) — ไม่แตะเพลงที่กำลังเล่น/ตำแหน่งเพลง
+function moveItem(state, id, to) {
+  const from = state.queue.findIndex((item) => item.id === id);
+  if (from === -1) return state;
+  const target = Math.min(Math.max(0, to), state.queue.length - 1);
+  if (target === from) return state;
+  const rest = state.queue.filter((item) => item.id !== id);
+  return { ...state, queue: [...rest.slice(0, target), state.queue[from], ...rest.slice(target)] };
+}
+
 function jumpTo(state, id, now) {
   const item = state.queue.find((q) => q.id === id);
   if (!item || item.blocked) return state;
@@ -132,6 +142,8 @@ function applyAction(state, action, now) {
       return jumpTo(state, action.id, now);
     case 'remove':
       return removeItem(state, action.id, now);
+    case 'move':
+      return moveItem(state, action.id, action.to);
     // 'ended'/'blocked' อาจถูกส่งมาจากหลายเครื่องพร้อมกัน → ทำเฉพาะเมื่อ id ตรงกับเพลงปัจจุบัน
     // เครื่องแรกที่ส่งมาจะเลื่อนเพลงไป เครื่องที่ส่งตามมาจะถูกเมิน (กันข้ามเพลงซ้ำ)
     case 'ended':

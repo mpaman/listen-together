@@ -1,6 +1,6 @@
 // ตรวจทุกอย่างที่มาจากหน้าเว็บก่อนเข้า reducer — ไม่เชื่อข้อมูลจาก client
 import { randomUUID } from 'node:crypto';
-import { WHEN_EMPTY_MODES } from './room.js';
+import { MAX_QUEUE, WHEN_EMPTY_MODES } from './room.js';
 import { isVideoId, thumbnailFor } from './youtube.js';
 
 // ชื่อห้องใช้ภาษาไทยได้: ตัวอักษรทุกภาษา (\p{L}) + สระ/วรรณยุกต์ไทย (\p{M}) + ตัวเลข + ขีด
@@ -61,6 +61,11 @@ export function sanitizeAction(raw, addedBy) {
   if (type === 'add') {
     if (!isVideoId(raw.item?.videoId)) return null;
     return { type, item: makeQueueItem(raw.item, addedBy) };
+  }
+  if (type === 'move') {
+    const to = Number(raw.to);
+    const okId = typeof raw.id === 'string' && raw.id.length <= 64;
+    return okId && Number.isInteger(to) && to >= 0 && to < MAX_QUEUE ? { type, id: raw.id, to } : null;
   }
   if (type === 'mode') return WHEN_EMPTY_MODES.includes(raw.mode) ? { type, mode: raw.mode } : null;
   return null;

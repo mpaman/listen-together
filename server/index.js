@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
+import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
 import { resolveLink, search, suggest } from './youtube.js';
@@ -75,7 +76,7 @@ app.get('/api/resolve', async (req, res) => {
 const httpServer = createServer(app);
 const io = new Server(httpServer);
 
-// rooms: roomId → { state, users: Map<socketId, name>, cleanupTimer, event, fillingFor }
+// rooms: roomId → { state, users: Map<socketId, name>, cleanupTimer, event, fillingFor, chat, chatSeq }
 const rooms = new Map();
 const AUTO_ADDED_BY = 'ต่อให้อัตโนมัติ';
 const LOBBY_LIMIT = 20;
@@ -99,11 +100,12 @@ app.get('/api/rooms', (_req, res) => {
 const snapshot = (room) => ({ ...room.state, event: room.event ?? null, serverTime: Date.now() });
 const userList = (room) => [...room.users.values()];
 
-function describeEvent(action, actor, seq) {
+function describeEvent(action, actor, seq, state) {
   const event = { seq, type: action.type, by: actor.name, bySocket: actor.socketId };
   if (action.type === 'add') event.title = action.item.title;
   if (action.type === 'autofill') event.count = action.items.length;
   if (action.type === 'mode') event.mode = action.mode;
+  if (action.type === 'move') event.title = state.queue.find((item) => item.id === action.id)?.title;
   return event;
 }
 
@@ -112,7 +114,7 @@ function dispatch(roomId, room, action, actor) {
   const next = reduce(room.state, action, Date.now());
   if (next === room.state) return;
   room.state = next;
-  room.event = describeEvent(action, actor, next.version);
+  room.event = describeEvent(action, actor, next.version, next);
   io.to(roomId).emit('state', snapshot(room));
   maybeAutofill(roomId, room);
 }
@@ -161,7 +163,7 @@ function getOrCreateRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
     if (rooms.size >= MAX_ROOMS) return null;
-    room = { state: createRoomState(Date.now()), users: new Map(), cleanupTimer: null };
+    room = { state: createRoomState(Date.now()), users: new Map(), cleanupTimer: null, chat: [], chatSeq: 0 };
     rooms.set(roomId, room);
   }
   clearTimeout(room.cleanupTimer);
@@ -199,6 +201,7 @@ io.on('connection', (socket) => {
   let roomId = null;
   let userName = '';
   const allow = createRateLimiter();
+  const allowChat = createChatLimiter();
 
   // ใช้ให้หน้าเว็บวัดว่านาฬิกาเครื่องตัวเองต่างจาก server เท่าไร
   socket.on('time', (ack) => typeof ack === 'function' && allow() && ack(Date.now()));
@@ -214,7 +217,7 @@ io.on('connection', (socket) => {
     userName = cleanName(payload?.name);
     room.users.set(socket.id, userName);
     socket.join(roomId);
-    ack({ state: snapshot(room), users: userList(room) });
+    ack({ state: snapshot(room), users: userList(room), chat: room.chat });
     socket.to(roomId).emit('users', userList(room));
   });
 
@@ -223,6 +226,21 @@ io.on('connection', (socket) => {
     if (!room || !allow()) return;
     const action = sanitizeAction(raw, userName);
     if (action) dispatch(roomId, room, action, { name: userName, socketId: socket.id });
+  });
+
+  // แชท: ตอบ ack ว่าส่งได้ไหม (หน้าเว็บจะได้บอกว่า "ส่งถี่ไป" แทนการเงียบหาย)
+  socket.on('chat', (raw, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const room = roomId && rooms.get(roomId);
+    if (!room) return reply({ error: 'ยังไม่ได้เข้าห้อง' });
+    const text = cleanChatText(raw);
+    if (!text) return reply({ error: 'ข้อความว่าง' });
+    if (!allowChat(Date.now())) return reply({ error: 'ส่งถี่ไป รอแป๊บนึง' });
+    room.chatSeq += 1;
+    const message = { id: room.chatSeq, name: userName, text, at: Date.now(), bySocket: socket.id };
+    room.chat = appendChat(room.chat, message);
+    io.to(roomId).emit('chat', message);
+    return reply({ ok: true });
   });
 
   socket.on('disconnect', () => {

@@ -5,6 +5,7 @@ import { createClock } from './clock.js';
 import { createPlayer } from './player.js';
 import { isRoomId, normalizeRoomId, suggestRoomName } from './room-name.js';
 import { createSyncer, currentItem, expectedPosition } from './sync.js';
+import { createQueueDrag } from './queue-drag.js';
 import * as ui from './ui.js';
 
 const TICK_MS = 400;
@@ -27,6 +28,12 @@ let reportedEndKey = null;
 let lastEventSeq = 0;
 let smoothDrift = 0;
 let searchEnabled = false;
+let activeTab = 'queue';
+let unread = 0;
+// socket.id เปลี่ยนทุกครั้งที่ต่อใหม่ → จำไว้ทุกตัว ข้อความเก่าของเราจะยังเป็น "คุณ"
+const mySocketIds = new Set();
+const isMine = (msg) => mySocketIds.has(msg.bySocket);
+const CHAT_TOAST_LEN = 60;
 
 // ---------- ห้อง ----------
 function roomFromUrl() {
@@ -52,6 +59,7 @@ function join() {
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
     renderUsers(res.users);
+    ui.renderChatHistory(res.chat ?? [], isMine);
   });
 }
 
@@ -63,16 +71,86 @@ function applyState(next, force = false) {
     lastEventSeq = ev.seq;
     if (ev.bySocket !== socket.id) ui.toastEvent(ev); // ของที่เรากดเองไม่ต้องเด้งบอกตัวเอง
   }
-  ui.renderQueue(room, { onJump: (id) => send({ type: 'jump', id }), onRemove: (id) => send({ type: 'remove', id }) });
+  renderQueue();
   ui.renderNowPlaying(room);
   ui.renderMode(room.whenEmpty);
   syncer?.reconcile(room, clock.serverNow());
 }
 
-socket.on('connect', () => joined && join()); // หลุดแล้วต่อใหม่ → server ลืมเราแล้ว ต้อง join ซ้ำ
+// ระหว่างลากเรียงคิว ห้ามวาดคิวใหม่ (แถวที่ถืออยู่จะหลุดมือ) → จำไว้ แล้ววาดตอนปล่อย
+let queueDrag = null;
+let queueDirty = false;
+function renderQueue() {
+  if (queueDrag?.isDragging()) {
+    queueDirty = true;
+    return;
+  }
+  queueDirty = false;
+  ui.renderQueue(room, { onJump: (id) => send({ type: 'jump', id }), onRemove: (id) => send({ type: 'remove', id }) });
+  queueDrag?.restoreFocus();
+}
+
+socket.on('connect', () => {
+  mySocketIds.add(socket.id);
+  if (joined) join();
+}); // หลุดแล้วต่อใหม่ → server ลืมเราแล้ว ต้อง join ซ้ำ
 socket.on('state', (state) => applyState(state));
 const renderUsers = (users) => ui.renderUsers(users, $('gate-name').value.trim());
 socket.on('users', renderUsers);
+socket.on('chat', onChat);
+
+// ---------- แชท ----------
+function onChat(msg) {
+  const mine = isMine(msg);
+  ui.appendChatMessage(msg, mine);
+  if (mine || (activeTab === 'chat' && !document.hidden)) return;
+  unread += 1;
+  ui.setUnread(unread);
+  if (activeTab !== 'chat') {
+    const text = msg.text.length > CHAT_TOAST_LEN ? `${msg.text.slice(0, CHAT_TOAST_LEN)}…` : msg.text;
+    ui.toast(`${msg.name}: ${text}`, 'chat');
+  }
+}
+
+function showTab(name) {
+  activeTab = name;
+  ui.setTab(name);
+  if (name === 'chat') {
+    unread = 0;
+    ui.setUnread(0);
+    ui.scrollChatToEnd();
+  }
+}
+
+function bindChat() {
+  for (const tab of document.querySelectorAll('.tabs [data-tab]')) {
+    tab.addEventListener('click', () => {
+      showTab(tab.dataset.tab);
+      if (tab.dataset.tab === 'chat') $('chat-input').focus();
+    });
+  }
+  // ลูกศรซ้าย/ขวาสลับแท็บ (แบบ tablist มาตรฐาน)
+  $('tab-queue').parentElement.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const next = activeTab === 'queue' ? 'chat' : 'queue';
+    showTab(next);
+    $(`tab-${next}`).focus();
+  });
+  // กลับมาที่แท็บเบราว์เซอร์ขณะเปิดแชทอยู่ = อ่านแล้ว
+  document.addEventListener('visibilitychange', () => !document.hidden && activeTab === 'chat' && showTab('chat'));
+  $('chat-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = $('chat-input');
+    const text = input.value.trim();
+    if (!text || !joined) return;
+    input.value = '';
+    socket.emit('chat', text, (res) => {
+      if (!res?.error) return;
+      if (!input.value) input.value = text; // ส่งไม่ผ่าน → คืนข้อความให้ ไม่ต้องพิมพ์ใหม่
+      ui.toast(res.error);
+    });
+  });
+}
 
 // ---------- ตัวเล่น ----------
 // คืนเพลงปัจจุบัน เฉพาะเมื่อตัวเล่นเครื่องนี้โหลดเพลงนั้นอยู่จริง
@@ -273,6 +351,11 @@ async function main() {
   bindTransport();
   bindSearch();
   bindPeople();
+  bindChat();
+  queueDrag = createQueueDrag($('queue'), {
+    onMove: (id, to) => send({ type: 'move', id, to }),
+    onEnd: () => queueDirty && room && renderQueue(),
+  });
   bindRoomLink();
   getJson('/api/config')
     .then((cfg) => {

@@ -176,3 +176,24 @@ test('sanitizeAction ทิ้งข้อมูลแปลกปลอม แ�
   assert.equal(add.item.thumb, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg');
   assert.equal(add.item.addedBy, 'Man');
 });
+
+test('move: ย้ายเพลงในคิว ไม่แตะเพลงที่เล่นอยู่/ตำแหน่ง และ id หาย/ที่เดิม → object เดิม', () => {
+  let s = createRoomState(0);
+  for (const id of ['a', 'b', 'c', 'd']) s = reduce(s, { type: 'add', item: song(id) }, 0);
+  s = reduce(s, { type: 'seek', position: 42 }, 1000);
+  const moved = reduce(s, { type: 'move', id: 'd', to: 1 }, 2000);
+  assert.deepEqual(moved.queue.map((q) => q.id), ['a', 'd', 'b', 'c']);
+  assert.equal(moved.currentId, 'a');
+  assert.equal(moved.position, 42);
+  assert.equal(moved.version, s.version + 1);
+  assert.deepEqual(reduce(moved, { type: 'move', id: 'a', to: 99 }, 0).queue.map((q) => q.id), ['d', 'b', 'c', 'a']);
+  assert.equal(reduce(moved, { type: 'move', id: 'd', to: 1 }, 0), moved);
+  assert.equal(reduce(moved, { type: 'move', id: 'zzz', to: 0 }, 0), moved);
+});
+
+test('sanitizeAction move: ต้องมี id และ to เป็นจำนวนเต็มไม่ติดลบ', () => {
+  assert.deepEqual(sanitizeAction({ type: 'move', id: 'x', to: 2, extra: 1 }), { type: 'move', id: 'x', to: 2 });
+  assert.equal(sanitizeAction({ type: 'move', id: 'x', to: -1 }), null);
+  assert.equal(sanitizeAction({ type: 'move', id: 'x', to: 1.5 }), null);
+  assert.equal(sanitizeAction({ type: 'move', id: 5, to: 1 }), null);
+});

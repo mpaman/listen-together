@@ -403,13 +403,116 @@ body.is-playing .ctrl-main .icon-pause { opacity: 1; transform: none; filter: no
   color: var(--muted);
 }
 
-.queue-head {
-  display: flex;
+/* แท็บ คิว | แชท — ขีดใต้แท็บที่เลือก ไม่ใช่กล่อง (ไม่แย่งสายตากับ segmented ข้างล่าง) */
+.tabs { display: flex; gap: 18px; margin: 16px 4px 12px; border-bottom: 1px solid var(--line); }
+.tab {
+  position: relative;
+  display: inline-flex;
   align-items: baseline;
-  justify-content: space-between;
-  margin: 18px 4px 8px;
+  gap: 8px;
+  padding: 4px 0 10px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--muted);
+  transition: color var(--t-fast) ease-out;
 }
-.queue-head h2 { margin: 0; font-family: var(--font-display); font-weight: 600; font-size: 1.1rem; }
+.tab:hover { color: var(--text); }
+.tab[aria-selected='true'] { color: var(--text); }
+.tab::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--amber);
+  transform: scaleX(0);
+  transition: transform var(--t-med) var(--ease-out);
+}
+.tab[aria-selected='true']::after { transform: scaleX(1); }
+.tab .count { font-family: var(--font-ui, inherit); font-weight: 400; }
+.badge {
+  align-self: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--coral);
+  color: #17130f;
+  font-family: var(--font-ui, inherit);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  animation: pop-in var(--t-med) var(--ease-out);
+}
+.badge[hidden] { display: none; }
+
+.pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pane[hidden] { display: none; }
+
+/* ---------- แชท ---------- */
+.pane-chat { min-height: 380px; }
+.chat-log {
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-empty {
+  margin: auto;
+  display: grid;
+  gap: 4px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.chat-empty strong { color: var(--text); font-weight: 500; }
+.chat-msg { max-width: 85%; align-self: flex-start; margin-top: 10px; }
+.chat-msg.is-cont { margin-top: 0; }
+.chat-msg.is-mine { align-self: flex-end; text-align: right; }
+.chat-msg.is-new { animation: pop-in var(--t-med) var(--ease-out); }
+.chat-head { display: flex; align-items: baseline; gap: 8px; margin: 0 4px 3px; font-size: 0.76rem; }
+.chat-msg.is-mine .chat-head { justify-content: flex-end; }
+.chat-name { color: var(--hue, var(--muted)); font-weight: 600; }
+.chat-time { color: var(--faint, var(--muted)); font-variant-numeric: tabular-nums; }
+.chat-text {
+  display: inline-block;
+  margin: 0;
+  padding: 7px 11px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.chat-msg.is-mine .chat-text { background: rgba(242, 165, 65, 0.16); }
+.chat-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 46px;
+  margin-top: 8px;
+  padding: 0 6px 0 12px;
+  border-radius: var(--r-row);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  transition: border-color var(--t-fast) ease-out;
+}
+.chat-form:focus-within { border-color: rgba(242, 165, 65, 0.55); }
+.chat-form input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; }
+.chat-form input::placeholder { color: var(--faint, var(--muted)); }
+.chat-form .chat-send { color: var(--amber); }
 .count { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .when-empty { display: flex; align-items: center; gap: 10px; margin: 0 4px 10px; }
@@ -636,10 +739,41 @@ body.is-playing .ctrl-main .icon-pause { opacity: 1; transform: none; filter: no
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   .panel { position: static; max-height: none; }
+  .pane-chat { height: min(60vh, 480px); min-height: 0; }
   .now { min-height: 0; }
 }
 @media (max-width: 520px) {
   .room-btn-hint { display: none; }
   .when-empty { flex-direction: column; align-items: stretch; gap: 6px; }
   .segmented button { font-size: 0.74rem; }
+}
+
+/* ---------- ลากเรียงคิว ---------- */
+.queue .song { grid-template-columns: 24px 64px minmax(0, 1fr) auto; gap: 8px; padding-left: 0; position: relative; }
+.drag-handle {
+  width: 24px;
+  height: 40px;
+  border-radius: 6px;
+  color: var(--faint);
+  cursor: grab;
+  touch-action: none; /* นิ้วลากที่จับ = ย้ายเพลง ไม่ใช่เลื่อนหน้า */
+  opacity: 0.55;
+  transition: opacity var(--t-fast) ease-out, color var(--t-fast) ease-out;
+}
+.drag-handle .icon { width: 16px; height: 16px; }
+.song:hover .drag-handle,
+.drag-handle:focus-visible { opacity: 1; color: var(--muted); }
+.drag-handle:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+/* แถวอื่นเลื่อนหลบแบบนุ่ม · แถวที่ถืออยู่ตามนิ้วทันที (ไม่มี transition) */
+.queue.is-sorting .song { transition: transform var(--t-med) var(--ease-out); user-select: none; }
+.queue.is-sorting .song.is-dragging {
+  z-index: 2;
+  transition: none;
+  background: var(--surface-3);
+  box-shadow: var(--shadow-pop);
+  cursor: grabbing;
+}
+.queue.is-sorting .drag-handle { cursor: grabbing; }
+@media (hover: none) {
+  .drag-handle { opacity: 1; } /* มือถือไม่มี hover → โชว์ที่จับตลอด */
 }

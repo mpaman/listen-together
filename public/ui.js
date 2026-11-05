@@ -91,6 +91,9 @@ export function renderQueue(room, { onJump, onRemove }) {
   }
   for (const item of room.queue) {
     const { row, meta } = songRow(item, queueSub(item));
+    row.dataset.id = item.id;
+    const handle = iconButton('grip', `ย้าย ${item.title} (ลาก หรือกดลูกศรขึ้น/ลง)`, 'icon-btn drag-handle');
+    row.prepend(handle);
     const isCurrent = item.id === room.currentId;
     row.classList.toggle('is-current', isCurrent);
     row.classList.toggle('is-playing', isCurrent && room.isPlaying);
@@ -205,6 +208,75 @@ export function setPeoplePopover(open) {
   $('people-btn').setAttribute('aria-expanded', String(open));
 }
 
+// ---------- แชท ----------
+const CHAT_GROUP_MS = 2 * 60 * 1000; // คนเดิมพิมพ์ติดกันภายใน 2 นาที → ไม่ต้องโชว์ชื่อซ้ำ
+const NEAR_BOTTOM_PX = 48;
+const chatTime = (at) => new Date(at).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+let lastChat = null;
+
+function chatEmpty() {
+  const li = el('li', 'chat-empty');
+  li.append(el('strong', '', 'ยังไม่มีข้อความ'), el('span', '', 'ทักเพื่อนในห้องได้เลย'));
+  return li;
+}
+
+function chatRow(msg, isMine) {
+  const li = el('li', 'chat-msg');
+  li.classList.toggle('is-mine', isMine);
+  const isCont = lastChat && lastChat.bySocket === msg.bySocket && lastChat.name === msg.name && msg.at - lastChat.at < CHAT_GROUP_MS;
+  li.classList.toggle('is-cont', Boolean(isCont));
+  if (!isCont) {
+    const head = el('div', 'chat-head');
+    const name = el('span', 'chat-name', isMine ? 'คุณ' : msg.name);
+    if (!isMine) name.style.setProperty('--hue', hueFor(msg.name));
+    head.append(name, el('time', 'chat-time', chatTime(msg.at)));
+    li.append(head);
+  }
+  li.append(el('p', 'chat-text', msg.text));
+  lastChat = msg;
+  return li;
+}
+
+// วาดใหม่ทั้งหมด (ตอนเข้าห้อง / ต่อใหม่) — ประวัติจาก server
+export function renderChatHistory(messages, isMine) {
+  lastChat = null;
+  const log = $('chat-log');
+  log.replaceChildren(...(messages.length ? messages.map((m) => chatRow(m, isMine(m))) : [chatEmpty()]));
+  log.scrollTop = log.scrollHeight;
+}
+
+// ต่อท้ายทีละข้อความ · เลื่อนลงล่างเฉพาะถ้าเดิมอยู่ล่างสุดอยู่แล้ว (ไม่ดึงคนที่กำลังเลื่อนอ่านย้อนหลัง) หรือเป็นข้อความเรา
+export function appendChatMessage(msg, isMine) {
+  const log = $('chat-log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < NEAR_BOTTOM_PX;
+  log.querySelector('.chat-empty')?.remove();
+  const row = chatRow(msg, isMine);
+  row.classList.add('is-new');
+  log.append(row);
+  if (atBottom || isMine) log.scrollTop = log.scrollHeight;
+}
+
+export function scrollChatToEnd() {
+  const log = $('chat-log');
+  log.scrollTop = log.scrollHeight;
+}
+
+export function setTab(name) {
+  for (const tab of document.querySelectorAll('.tabs [data-tab]')) {
+    const active = tab.dataset.tab === name;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(`pane-${tab.dataset.tab}`).hidden = !active;
+  }
+}
+
+export function setUnread(count) {
+  const badge = $('chat-badge');
+  badge.hidden = count === 0;
+  badge.textContent = count > 99 ? '99+' : String(count);
+  $('tab-chat').setAttribute('aria-label', count ? `แชท ยังไม่อ่าน ${count} ข้อความ` : 'แชท');
+}
+
 // ---------- ป้ายซิงค์ ----------
 export function renderSync(state, text) {
   $('sync').dataset.state = state;
@@ -223,6 +295,7 @@ function eventText(ev) {
     case 'seek': return `${by} เลื่อนเพลง`;
     case 'jump': return `${by} เลือกเพลงในคิว`;
     case 'remove': return `${by} เอาเพลงออกจากคิว`;
+    case 'move': return ev.title ? `${by} ย้าย “${ev.title}”` : `${by} เรียงคิวใหม่`;
     case 'mode': return `${by} ตั้งเมื่อคิวหมด: ${MODE_LABEL[ev.mode] ?? ev.mode}`;
     case 'autofill': return `ต่อเพลงแนวเดียวกันให้ ${ev.count} เพลง`;
     case 'blocked': return 'ข้ามเพลงที่เล่นในเว็บนี้ไม่ได้';
