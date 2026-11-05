@@ -51,7 +51,7 @@ function join() {
     joined = true;
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
-    ui.renderUsers(res.users);
+    renderUsers(res.users);
   });
 }
 
@@ -71,7 +71,8 @@ function applyState(next, force = false) {
 
 socket.on('connect', () => joined && join()); // หลุดแล้วต่อใหม่ → server ลืมเราแล้ว ต้อง join ซ้ำ
 socket.on('state', (state) => applyState(state));
-socket.on('users', ui.renderUsers);
+const renderUsers = (users) => ui.renderUsers(users, $('gate-name').value.trim());
+socket.on('users', renderUsers);
 
 // ---------- ตัวเล่น ----------
 // คืนเพลงปัจจุบัน เฉพาะเมื่อตัวเล่นเครื่องนี้โหลดเพลงนั้นอยู่จริง
@@ -246,6 +247,15 @@ function bindSearch() {
   });
 }
 
+function bindPeople() {
+  const btn = $('people-btn');
+  btn.addEventListener('click', () => ui.setPeoplePopover(btn.getAttribute('aria-expanded') !== 'true'));
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && ui.setPeoplePopover(false));
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.people')) ui.setPeoplePopover(false);
+  });
+}
+
 function bindRoomLink() {
   $('copy-link').addEventListener('click', async () => {
     try {
@@ -262,6 +272,7 @@ async function main() {
   bindGate();
   bindTransport();
   bindSearch();
+  bindPeople();
   bindRoomLink();
   getJson('/api/config')
     .then((cfg) => {

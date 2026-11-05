@@ -37,7 +37,16 @@
         <span class="sync-dot" aria-hidden="true"></span>
         <span id="sync-text">กำลังเชื่อมต่อ…</span>
       </span>
-      <ul class="avatars" id="avatars" aria-label="คนที่ฟังอยู่"></ul>
+      <div class="people">
+        <button class="people-btn" id="people-btn" type="button" aria-expanded="false" aria-controls="people-pop">
+          <span class="avatars" id="avatars" aria-hidden="true"></span>
+          <span class="people-names" id="people-names"></span>
+        </button>
+        <div class="people-pop" id="people-pop" hidden>
+          <p class="people-pop-head" id="people-count"></p>
+          <ul class="people-list" id="people-list"></ul>
+        </div>
+      </div>
       <button class="room-btn" id="copy-link" type="button">
         <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>
         <span>ห้อง <strong id="room-id"></strong></span>

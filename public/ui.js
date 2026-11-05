@@ -151,17 +151,58 @@ function hueFor(name) {
   return AVATAR_HUES[hash % AVATAR_HUES.length];
 }
 
-export function renderUsers(users) {
-  const list = $('avatars');
-  list.replaceChildren();
-  for (const name of users.slice(0, AVATAR_LIMIT)) {
-    const li = el('li', 'avatar', Array.from(name)[0]?.toUpperCase() ?? '?');
-    li.style.setProperty('--hue', hueFor(name));
-    li.title = name;
-    list.append(li);
-  }
-  if (users.length > AVATAR_LIMIT) list.append(el('li', 'avatar avatar-more', `+${users.length - AVATAR_LIMIT}`));
-  list.setAttribute('aria-label', `ฟังอยู่ ${users.length} คน: ${users.join(', ')}`);
+// ตัดตาม "ตัวอักษรที่ตาเห็น" (grapheme) ไม่ใช่ code point — กันสระ/วรรณยุกต์ไทยหลุดจากพยัญชนะ
+const graphemes = (text) => Array.from(new Intl.Segmenter('th', { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+const SHORT_NAME_LEN = 8;
+const NAMES_IN_BAR = 2;
+const LEADING_THAI_VOWELS = 'เแโใไ';
+
+function shortName(name) {
+  const g = graphemes(name);
+  return g.length > SHORT_NAME_LEN ? `${g.slice(0, SHORT_NAME_LEN).join('')}…` : name;
+}
+
+// ตัวย่อในวงกลม: "เบส" ควรได้ "บ" ไม่ใช่ "เ" → ข้ามสระหน้าไทย
+function initialOf(name) {
+  const first = graphemes(name).find((g) => /\p{L}/u.test(g) && !LEADING_THAI_VOWELS.includes(g[0]));
+  return (first ?? name[0] ?? '?').toUpperCase();
+}
+
+function avatar(name, tag = 'span') {
+  const node = el(tag, 'avatar', initialOf(name));
+  node.style.setProperty('--hue', hueFor(name));
+  return node;
+}
+
+// แถบบน: วงกลม + ชื่อย่อ 2 คนแรก "+N" · กดแล้ว popover แสดงชื่อเต็มทุกคน
+export function renderUsers(users, myName = '') {
+  const avatars = $('avatars');
+  avatars.replaceChildren(...users.slice(0, AVATAR_LIMIT).map((name) => avatar(name)));
+  if (users.length > AVATAR_LIMIT) avatars.append(el('span', 'avatar avatar-more', `+${users.length - AVATAR_LIMIT}`));
+
+  const shown = users.slice(0, NAMES_IN_BAR).map(shortName).join(', ');
+  const rest = users.length - NAMES_IN_BAR;
+  $('people-names').textContent = rest > 0 ? `${shown} +${rest}` : shown;
+  $('people-btn').setAttribute('aria-label', `ฟังอยู่ ${users.length} คน — กดดูรายชื่อ`);
+
+  $('people-count').textContent = `ฟังอยู่ ${users.length} คน`;
+  let markedMe = false; // ชื่อซ้ำกันได้ → มาร์ค "(คุณ)" แค่คนแรกที่ชื่อตรง
+  $('people-list').replaceChildren(
+    ...users.map((name) => {
+      const li = el('li', 'person');
+      li.append(avatar(name), el('span', 'person-name', name));
+      if (!markedMe && name === myName) {
+        markedMe = true;
+        li.append(el('span', 'person-me', '(คุณ)'));
+      }
+      return li;
+    }),
+  );
+}
+
+export function setPeoplePopover(open) {
+  $('people-pop').hidden = !open;
+  $('people-btn').setAttribute('aria-expanded', String(open));
 }
 
 // ---------- ป้ายซิงค์ ----------

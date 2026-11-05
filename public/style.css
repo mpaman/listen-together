@@ -130,7 +130,57 @@ body.is-playing .disc { animation: spin 3.6s linear infinite; }
 .sync[data-state='catching'] .sync-dot { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
 .sync[data-state='off'] .sync-dot { background: var(--coral); }
 
-.avatars { display: flex; list-style: none; margin: 0; padding: 0 0 0 8px; }
+/* คนในห้อง: ปุ่ม (วงกลม + ชื่อย่อ) → popover รายชื่อเต็ม */
+.people { position: relative; }
+.people-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  max-width: 260px;
+  padding: 0 12px 0 4px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 0.84rem;
+  transition: background-color var(--t-fast, 0.15s) ease, border-color var(--t-fast, 0.15s) ease;
+}
+.people-btn:hover,
+.people-btn[aria-expanded='true'] { background: var(--surface-2); border-color: var(--line); }
+.people-btn:empty { display: none; }
+.people-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-pop {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  min-width: 200px;
+  max-width: min(300px, calc(100vw - 32px));
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-pop);
+  animation: pop-in var(--t-med) var(--ease-out);
+}
+.people-pop-head { margin: 4px 8px 6px; font-size: 0.76rem; color: var(--muted); }
+.people-list { list-style: none; margin: 0; padding: 0; }
+.person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+.person .avatar { margin-left: 0; width: 26px; height: 26px; flex: none; box-shadow: none; }
+.person-name { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.person-me { color: var(--muted); font-size: 0.78rem; flex: none; }
+
+.avatars { display: flex; flex: none; margin: 0; padding: 0 0 0 8px; }
 .avatar {
   display: grid;
   place-items: center;
