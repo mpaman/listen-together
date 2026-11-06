@@ -3,8 +3,9 @@
 
 // จำนวนตัวเลือกของแต่ละส่วน — ต้องตรงกับ public/lounge-avatar.js
 export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4 };
-export const ROOM_HALF_X = 7.5;
-export const ROOM_HALF_Z = 4.5;
+// ลานทั้งหมด (เวทีฟังเพลงอยู่ตรงกลาง) — ต้องตรงกับ WORLD ใน public/lounge-world.js
+export const ROOM_HALF_X = 24;
+export const ROOM_HALF_Z = 18;
 export const SEAT_COUNT = 8;
 export const GESTURES = ['jump', 'punch', 'wave', 'dance', 'laugh', 'love', 'party', 'cry', 'clap', 'angry', 'hit'];
 

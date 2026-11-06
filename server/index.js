@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, spawnPose } from './avatar.js';
+import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
@@ -79,7 +80,7 @@ app.get('/api/resolve', async (req, res) => {
 const httpServer = createServer(app);
 const io = new Server(httpServer);
 
-// rooms: roomId → { state, users: Map<socketId, {name, look, pose}>, cleanupTimer, event, fillingFor, chat, chatSeq }
+// rooms: roomId → { state, users: Map<socketId, {name, look, pose, held}>, items, cleanupTimer, event, fillingFor, chat, chatSeq }
 const rooms = new Map();
 const AUTO_ADDED_BY = 'ต่อให้อัตโนมัติ';
 const LOBBY_LIMIT = 20;
@@ -102,9 +103,19 @@ app.get('/api/rooms', (_req, res) => {
 // event = "ใครทำอะไรล่าสุด" ให้หน้าเว็บเด้งข้อความบอกคนอื่น (ไม่ใช่ส่วนของ reducer เพราะเป็นแค่การแจ้งเตือน)
 const snapshot = (room) => ({ ...room.state, event: room.event ?? null, serverTime: Date.now() });
 const userList = (room) => [...room.users.values()].map((user) => user.name);
-const avatarOf = (id, user) => ({ id, name: user.name, look: user.look, pose: user.pose });
+const avatarOf = (id, user) => ({ id, name: user.name, look: user.look, pose: user.pose, held: user.held });
 const avatarList = (room) => [...room.users.entries()].map(([id, user]) => avatarOf(id, user));
 const POSE_LIMIT_PER_SEC = 15;
+const ITEM_TICK_MS = 1000;
+
+// ของในลาน: ทุกวินาทีเช็คว่าห้องไหนถึงเวลาวางของใหม่ (เฉพาะห้องที่มีคนอยู่)
+const emitItems = (roomId, room) => io.to(roomId).emit('items', groundList(room.items));
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of rooms) {
+    if (room.users.size > 0 && spawnTick(room.items, now)) emitItems(roomId, room);
+  }
+}, ITEM_TICK_MS).unref();
 const GESTURE_LIMIT_PER_SEC = 4;
 
 function describeEvent(action, actor, seq, state) {
@@ -170,7 +181,7 @@ function getOrCreateRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
     if (rooms.size >= MAX_ROOMS) return null;
-    room = { state: createRoomState(Date.now()), users: new Map(), cleanupTimer: null, chat: [], chatSeq: 0 };
+    room = { state: createRoomState(Date.now()), users: new Map(), items: createItemState(), cleanupTimer: null, chat: [], chatSeq: 0 };
     rooms.set(roomId, room);
   }
   clearTimeout(room.cleanupTimer);
@@ -225,10 +236,10 @@ io.on('connection', (socket) => {
 
     roomId = requested;
     userName = cleanName(payload?.name);
-    const user = { name: userName, look: cleanLook(payload?.look), pose: spawnPose() };
+    const user = { name: userName, look: cleanLook(payload?.look), pose: spawnPose(), held: null };
     room.users.set(socket.id, user);
     socket.join(roomId);
-    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), you: socket.id });
+    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), items: groundList(room.items), you: socket.id });
     socket.to(roomId).emit('users', userList(room));
     socket.to(roomId).emit('avatar:join', avatarOf(socket.id, user));
   });
@@ -276,9 +287,30 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('avatar:look', { id: socket.id, look: user.look });
   });
 
+  // ไอเทม: client บอกว่าเดินทับของชิ้นไหน → server เช็คระยะ/ว่ายังมีของ แล้วบอกทุกคน
+  socket.on('item:pick', (rawId) => {
+    const room = roomId && rooms.get(roomId);
+    const user = me();
+    if (!user || !allowGesture(Date.now())) return;
+    const res = pickUp(room.items, user, rawId);
+    if (!res) return;
+    emitItems(roomId, room);
+    io.to(roomId).emit('avatar:held', { id: socket.id, kind: res.held });
+  });
+
+  socket.on('item:drop', () => {
+    const room = roomId && rooms.get(roomId);
+    const user = me();
+    if (!user || !allowGesture(Date.now()) || !drop(room.items, user)) return;
+    emitItems(roomId, room);
+    io.to(roomId).emit('avatar:held', { id: socket.id, kind: null });
+  });
+
   socket.on('disconnect', () => {
     const room = roomId && rooms.get(roomId);
     if (!room) return;
+    const leaving = room.users.get(socket.id);
+    if (leaving && drop(room.items, leaving)) emitItems(roomId, room); // ออกไปแล้วของหล่นไว้ตรงนั้น
     room.users.delete(socket.id);
     io.to(roomId).emit('users', userList(room));
     io.to(roomId).emit('avatar:leave', { id: socket.id });

@@ -1,14 +1,14 @@
-// ห้องนั่งเล่น 3D: ทุกคนในห้องมีตัวละคร เดิน/กระโดด/นั่ง/ต่อย/ทำท่าได้ + แชทขึ้นบนหัว
+// ลาน 3D (voxel 8-bit): ทุกคนในห้องมีตัวละคร เดิน/วิ่ง/กระโดด/นั่ง/ต่อย/ทำท่า + แชทขึ้นบนหัว + เก็บของแต่งตัว
 // แต่ละเครื่องคุมตัวละครของตัวเอง → ส่งตำแหน่งให้ server กระจาย (ตัวคนอื่นค่อยๆ เลื่อนตามให้ลื่น)
 // ต่อย: เครื่องของ "คนที่โดน" เป็นคนเช็คว่าโดนไหม แล้วกระเด็นเอง (ไม่ต้องให้ server คำนวณ)
+// ของในลาน: server เป็นคนวาง/ตัดสินว่าใครเก็บได้ เครื่องเราแค่บอกว่า "เดินทับชิ้นนี้แล้ว"
 import * as THREE from 'three';
 import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
+import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
+import { buildWorld, HALF_X, HALF_Z, pushOutOfBlocks, SEATS } from './lounge-world.js';
 
-const HALF_X = 7.5; // = ROOM_HALF_X ใน server/avatar.js
-const HALF_Z = 4.5;
 const WALK_SPEED = 3;
 const RUN_SPEED = 5.2; // กด Shift ค้าง
-const BODY_RADIUS = 0.28; // ตัวละครกว้างประมาณนี้ (ใช้ชนของ)
 const PERSONAL_SPACE = 0.55; // ใกล้กันกว่านี้จะถูกผลักออกเบาๆ ไม่ให้ซ้อนกัน
 const POSE_SEND_MS = 100;
 const PUNCH_RANGE = 1.6;
@@ -18,60 +18,12 @@ const BUBBLE_MS = 5000;
 const EMOTE_MS = 2200;
 const BUBBLE_LEN = 70;
 const SNAP_DIST = 4;
+const PICK_DIST = 1; // เดินเข้าใกล้ของเท่านี้ = เก็บ
+const PICK_RETRY_MS = 800; // server ปฏิเสธ (อีกคนเก็บไปก่อน) → ไม่ส่งซ้ำรัวๆ
+const PIXEL_HEIGHT = 300; // เรนเดอร์สูงแค่นี้พิกเซลแล้วขยาย = ภาพแตกเป็นพิกเซลแบบเกม 8-bit
+const SKY = 0x2b2747;
 
 export const EMOTES = { wave: '👋', dance: '💃', laugh: '😂', love: '❤️', party: '🎉', cry: '😢', clap: '👏', angry: '😡', hit: '💫' };
-
-// ที่นั่ง 8 ที่ (= SEAT_COUNT ใน server): โซฟาซ้าย 3 · โซฟาขวา 3 · บีนแบ็ก 2
-// ry = ทิศที่หันหน้าเมื่อนั่ง (0 = หันหาจอ/กล้อง +z)
-const SEATS = [
-  ...[-1, 0.2, 1.4].map((z) => ({ x: -6.3, z, ry: Math.PI / 2, h: 0.5 })),
-  ...[-1, 0.2, 1.4].map((z) => ({ x: 6.3, z, ry: -Math.PI / 2, h: 0.5 })),
-  { x: -1.6, z: 3.3, ry: Math.PI, h: 0.35 },
-  { x: 1.6, z: 3.3, ry: Math.PI, h: 0.35 },
-];
-
-// ของที่เดินทะลุไม่ได้ (ตอนเดินไปนั่ง จะข้ามเฉพาะตอนมีเป้าหมายเป็นที่นั่ง)
-const SOFA_HALF = { x: 0.6, z: 2.1 }; // โซฟา (รวมที่พักแขน/พนักพิง) กึ่งกลางที่ x = ±6.6, z = 0.2
-const BLOCKS = [
-  ...[-1, 1].map((side) => ({ box: true, x: side * 6.6, z: 0.2, hx: SOFA_HALF.x, hz: SOFA_HALF.z })),
-  ...[-1, 1].map((side) => ({ box: false, x: side * 1.6, z: 3.3, r: 0.5 })), // บีนแบ็ก
-];
-
-// ผลักวงกลมของตัวละคร (x, z) ออกจากสิ่งกีดขวาง · คืนตำแหน่งใหม่
-function pushOutOfBlocks(x, z) {
-  let nx = x;
-  let nz = z;
-  for (const b of BLOCKS) {
-    if (b.box) {
-      const cx = Math.max(b.x - b.hx, Math.min(b.x + b.hx, nx));
-      const cz = Math.max(b.z - b.hz, Math.min(b.z + b.hz, nz));
-      let dx = nx - cx;
-      let dz = nz - cz;
-      let d = Math.hypot(dx, dz);
-      if (d >= BODY_RADIUS) continue;
-      if (d < 1e-4) { // จุดศูนย์กลางอยู่ในกล่อง → ดันออกทางด้านที่ใกล้สุด
-        const toX = b.hx - Math.abs(nx - b.x);
-        const toZ = b.hz - Math.abs(nz - b.z);
-        if (toX < toZ) { dx = Math.sign(nx - b.x) || 1; dz = 0; d = 1; nx = b.x + dx * (b.hx + BODY_RADIUS); }
-        else { dz = Math.sign(nz - b.z) || 1; dx = 0; d = 1; nz = b.z + dz * (b.hz + BODY_RADIUS); }
-        continue;
-      }
-      nx = cx + (dx / d) * BODY_RADIUS;
-      nz = cz + (dz / d) * BODY_RADIUS;
-    } else {
-      const dx = nx - b.x;
-      const dz = nz - b.z;
-      const d = Math.hypot(dx, dz);
-      const min = b.r + BODY_RADIUS;
-      if (d >= min) continue;
-      const ux = d < 1e-4 ? 1 : dx / d;
-      const uz = d < 1e-4 ? 0 : dz / d;
-      nx = b.x + ux * min;
-      nz = b.z + uz * min;
-    }
-  }
-  return [nx, nz];
-}
 
 const clampX = (x) => Math.max(-HALF_X, Math.min(HALF_X, x));
 const clampZ = (z) => Math.max(-HALF_Z, Math.min(HALF_Z, z));
@@ -82,126 +34,37 @@ const clip = (text) => {
   return g.length > BUBBLE_LEN ? `${g.slice(0, BUBBLE_LEN).join('')}…` : text;
 };
 
-function lambert(color, extra) {
-  return new THREE.MeshLambertMaterial({ color, ...extra });
-}
-
-function box(w, h, d, color, x, y, z) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), lambert(color));
-  m.position.set(x, y, z);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
-}
-
-// ---------- ฉาก ----------
-function buildRoom(scene) {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(HALF_X * 2 + 2, HALF_Z * 2 + 2), lambert(0x3a2c25));
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  floor.name = 'floor';
-  scene.add(floor);
-
-  const rug = new THREE.Mesh(new THREE.CircleGeometry(3, 40), lambert(0x6b3b3b));
-  rug.rotation.x = -Math.PI / 2;
-  rug.position.set(0, 0.01, 0.6);
-  rug.receiveShadow = true;
-  scene.add(rug);
-
-  // ผนังหลัง + ผนังข้าง (เตี้ยๆ ให้มองเห็นในห้อง)
-  scene.add(box(HALF_X * 2 + 2, 3.2, 0.3, 0x2a2223, 0, 1.6, -HALF_Z - 1));
-  scene.add(box(0.3, 1.2, HALF_Z * 2 + 2, 0x2a2223, -HALF_X - 1, 0.6, 0));
-  scene.add(box(0.3, 1.2, HALF_Z * 2 + 2, 0x2a2223, HALF_X + 1, 0.6, 0));
-
-  // ไฟประดับตามผนังหลัง
-  const bulb = new THREE.SphereGeometry(0.06, 8, 6);
-  for (let i = 0; i <= 24; i += 1) {
-    const x = -HALF_X + (i / 24) * HALF_X * 2;
-    const m = new THREE.Mesh(bulb, new THREE.MeshBasicMaterial({ color: i % 3 ? 0xf2a541 : 0xf5d76e }));
-    m.position.set(x, 2.7 - Math.sin((i / 24) * Math.PI * 4) ** 2 * 0.25, -HALF_Z - 0.8);
-    scene.add(m);
-  }
-
-  // ลำโพง 2 ข้าง
-  const speakers = [-1, 1].map((side) => {
-    const g = new THREE.Group();
-    g.add(box(0.8, 1.6, 0.6, 0x1d191a, 0, 0.8, 0));
-    const cone = new THREE.Mesh(new THREE.CircleGeometry(0.26, 20), lambert(0x4a4040));
-    cone.position.set(0, 1.0, 0.31);
-    g.add(cone);
-    g.position.set(side * 5.2, 0, -HALF_Z - 0.3);
-    scene.add(g);
-    return cone;
-  });
-
-  // ต้นไม้มุมห้อง
-  for (const [x, z] of [[-HALF_X + 0.2, -HALF_Z + 0.2], [HALF_X - 0.2, -HALF_Z + 0.2]]) {
-    scene.add(box(0.5, 0.5, 0.5, 0x7a4a33, x, 0.25, z));
-    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.4, 8), lambert(0x4f8a5b));
-    leaf.position.set(x, 1.2, z);
-    leaf.castShadow = true;
-    scene.add(leaf);
-  }
-
-  // โซฟา 2 ตัว + บีนแบ็ก 2 ใบ (ที่นั่งจริงคือ SEATS — เฟอร์นิเจอร์แค่ให้ดูเป็นที่นั่ง)
-  const seatHits = [];
-  for (const side of [-1, 1]) {
-    const x = side * 6.6;
-    const sofa = new THREE.Group();
-    sofa.add(box(1.0, 0.45, 3.8, 0x8c4a3c, 0, 0.225, 0.2));
-    sofa.add(box(0.3, 1.0, 3.8, 0x7a3f33, side * 0.5, 0.5, 0.2));
-    sofa.add(box(1.0, 0.7, 0.3, 0x7a3f33, 0, 0.35, -1.75));
-    sofa.add(box(1.0, 0.7, 0.3, 0x7a3f33, 0, 0.35, 2.15));
-    sofa.position.x = x;
-    scene.add(sofa);
-  }
-  for (const side of [-1, 1]) {
-    const bag = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 12), lambert(side < 0 ? 0x5a7fa8 : 0x8a6fb8));
-    bag.scale.y = 0.55;
-    bag.position.set(side * 1.6, 0.28, 3.3);
-    bag.castShadow = true;
-    scene.add(bag);
-  }
-  // จุดกดนั่ง (มองไม่เห็น แต่ raycast โดน)
-  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-  SEATS.forEach((seat, index) => {
-    const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1, 10), hitMat);
-    hit.position.set(seat.x, 0.5, seat.z);
-    hit.userData.seat = index;
-    scene.add(hit);
-    seatHits.push(hit);
-  });
-
-  return { floor, seatHits, speakers };
-}
-
-// จอบนผนัง: เขียนชื่อเพลงลง canvas แล้วใช้เป็น texture (ไม่ต้องโหลดรูปข้ามโดเมน)
+// จอบนเวที: เขียนชื่อเพลงลง canvas ความละเอียดต่ำ แล้วใช้เป็น texture แบบพิกเซล
 function buildScreen(scene) {
   const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 256;
+  canvas.width = 384;
+  canvas.height = 96;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.75), new THREE.MeshBasicMaterial({ map: texture }));
-  screen.position.set(0, 1.9, -HALF_Z - 0.84);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 1.8), new THREE.MeshBasicMaterial({ map: texture }));
+  screen.position.set(0, 2.0, -6.26);
   scene.add(screen);
 
   function draw(title, isPlaying) {
     const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    grad.addColorStop(0, '#2a1f1a');
-    grad.addColorStop(1, isPlaying ? '#4a2e14' : '#241e1f');
-    ctx.fillStyle = grad;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = isPlaying ? '#262b44' : '#181425';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = isPlaying ? '#f2a541' : '#a39a92';
-    ctx.font = '600 40px "IBM Plex Sans Thai", sans-serif';
+    for (let y = 0; y < canvas.height; y += 4) { // เส้นสแกนแบบจอ CRT
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(0, y, canvas.width, 1);
+    }
+    ctx.fillStyle = isPlaying ? '#feae34' : '#8b9bb4';
+    ctx.font = '600 16px "Chakra Petch", "Pixelify Sans", sans-serif';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isPlaying ? '♪ กำลังเล่น' : title ? '❚❚ พักเพลง' : 'ยังไม่มีเพลง', 48, 70);
-    ctx.fillStyle = '#f4ede4';
-    ctx.font = '600 64px "IBM Plex Sans Thai", sans-serif';
+    ctx.fillText(isPlaying ? '▶ กำลังเล่น' : title ? '❚❚ พักเพลง' : 'ยังไม่มีเพลง', 16, 26);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '600 26px "Chakra Petch", "Pixelify Sans", sans-serif';
     let text = title ?? 'ค้นเพลงแล้วกด + เพื่อเริ่ม';
-    while (ctx.measureText(text).width > canvas.width - 96 && text.length > 1) text = `${text.slice(0, -2)}…`;
-    ctx.fillText(text, 48, 160);
+    while (ctx.measureText(text).width > canvas.width - 32 && text.length > 1) text = `${text.slice(0, -2)}…`;
+    ctx.fillText(text, 16, 62);
     texture.needsUpdate = true;
   }
   draw(null, false);
@@ -244,37 +107,36 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.BasicShadowMap; // เงาขอบแข็ง เข้ากับภาพพิกเซล
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x161213);
-  scene.fog = new THREE.Fog(0x161213, 18, 32);
-  const camera = new THREE.PerspectiveCamera(38, 16 / 9, 0.1, 60);
+  scene.background = new THREE.Color(SKY);
+  scene.fog = new THREE.Fog(SKY, 26, 46);
+  const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 120);
 
-  scene.add(new THREE.HemisphereLight(0xffe8cc, 0x2a1f1a, 1.1));
-  const sun = new THREE.DirectionalLight(0xffd29a, 1.6);
-  sun.position.set(4, 10, 6);
+  scene.add(new THREE.HemisphereLight(0xc7d6ff, 0x3e2731, 1.5));
+  const sun = new THREE.DirectionalLight(0xffe2b0, 2.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
-  Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 8, bottom: -8 });
-  scene.add(sun);
+  Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 });
+  scene.add(sun, sun.target);
 
-  const { floor, seatHits, speakers } = buildRoom(scene);
+  const { floor, seatHits, speakers, blocks } = buildWorld(scene);
   const drawScreen = buildScreen(scene);
   let music = false;
 
-  const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed }
+  const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed, vel, lastDrop }
   let myId = null;
 
   // ---------- จัดการตัวละคร ----------
-  function add({ id, name, look, pose }) {
+  function add({ id, name, look, pose, held }) {
     remove(id);
     const av = createAvatar(look);
+    av.setHeld(held ?? null);
     const isMe = id === myId;
     const entry = {
       av,
@@ -289,6 +151,7 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
     av.root.position.copy(entry.pos);
     scene.add(av.root);
     avatars.set(id, entry);
+    if (isMe) snapCamera();
   }
 
   function remove(id) {
@@ -300,6 +163,85 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
   }
 
   const me = () => avatars.get(myId);
+
+  // ---------- ของบนพื้น ----------
+  const ground = new Map(); // id → { group, kind, x, z }
+  const pickTriedAt = new Map();
+  // ของที่เพิ่งหล่นตรงเท้าเรา (กดวาง/สลับของ) → ไม่เก็บจนกว่าจะเดินออกห่าง ไม่งั้นเก็บกลับทันที/สลับวนไม่จบ
+  const ignoreUntilAway = new Set();
+  const AWAY_DIST = PICK_DIST + 0.6;
+
+  function setItems(list) {
+    const entry = me();
+    for (const item of list) {
+      if (ground.has(item.id) || !entry) continue;
+      if (Math.hypot(item.x - entry.pos.x, item.z - entry.pos.z) < AWAY_DIST) ignoreUntilAway.add(item.id);
+    }
+    const keep = new Set(list.map((item) => item.id));
+    for (const [id, item] of ground) {
+      if (keep.has(id)) continue;
+      scene.remove(item.group);
+      ground.delete(id);
+      ignoreUntilAway.delete(id);
+      pickTriedAt.delete(id);
+    }
+    for (const { id, kind, x, z } of list) {
+      if (ground.has(id)) continue;
+      const group = new THREE.Group();
+      const model = buildItem(kind);
+      model.rotation.z = model.userData.upright ? 0 : 0.6; // ของยาวเอียงนิดๆ ให้ดูเป็นของดรอป
+      group.add(model);
+      const glow = new THREE.Mesh(
+        new THREE.RingGeometry(0.32, 0.46, 4, 1),
+        new THREE.MeshBasicMaterial({ color: 0xfee761, transparent: true, opacity: 0.7, depthWrite: false }),
+      );
+      glow.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
+      glow.position.y = -0.33;
+      group.add(glow);
+      group.position.set(x, 0.35, z);
+      group.userData.seed = id;
+      scene.add(group);
+      ground.set(id, { group, kind, x, z });
+    }
+  }
+
+  function animateGround(now) {
+    const t = now / 1000;
+    for (const item of ground.values()) {
+      const s = item.group.userData.seed;
+      item.group.position.y = 0.4 + Math.sin(t * 2.4 + s) * 0.08;
+      item.group.rotation.y = t * 1.4 + s;
+      animateItem(item.group.children[0], t);
+    }
+  }
+
+  // เดินทับของ → บอก server (server เช็คระยะเองอีกที)
+  function checkPickup(now) {
+    const entry = me();
+    if (!entry || entry.sit !== null) return;
+    for (const [id, item] of ground) {
+      const dist = Math.hypot(item.x - entry.pos.x, item.z - entry.pos.z);
+      if (ignoreUntilAway.has(id)) {
+        if (dist > AWAY_DIST) ignoreUntilAway.delete(id); // เดินออกไปแล้ว → กลับมาเก็บได้
+        continue;
+      }
+      if (dist > PICK_DIST) continue;
+      if (now - (pickTriedAt.get(id) ?? -Infinity) < PICK_RETRY_MS) continue;
+      pickTriedAt.set(id, now);
+      onPick?.(id);
+    }
+  }
+
+  function setHeld(id, kind) {
+    const entry = avatars.get(id);
+    if (!entry) return;
+    entry.av.setHeld(kind);
+    if (id === myId && kind) onNotice(`ได้${ITEM_NAMES[kind] ?? 'ของ'}แล้ว! กด G เพื่อวาง`);
+  }
+
+  function dropHeld() {
+    if (me()?.av.held()) onDrop?.();
+  }
 
   // ---------- คุมตัวเอง ----------
   const keys = new Set();
@@ -400,87 +342,92 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
     sendPose(performance.now(), true);
   }
 
-  // วงกลมเรืองๆ บนพื้นตรงจุดที่แตะ
+  // วงกลมบนพื้นตรงจุดที่แตะ
   const marker = new THREE.Mesh(
-    new THREE.RingGeometry(0.22, 0.3, 28),
-    new THREE.MeshBasicMaterial({ color: 0xf2a541, transparent: true, opacity: 0.8, depthWrite: false }),
+    new THREE.RingGeometry(0.22, 0.32, 4, 1),
+    new THREE.MeshBasicMaterial({ color: 0xfeae34, transparent: true, opacity: 0.9, depthWrite: false }),
   );
-  marker.rotation.x = -Math.PI / 2;
+  marker.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
   marker.visible = false;
   scene.add(marker);
+
+  function keyDirection() {
+    let dx = 0;
+    let dz = 0;
+    if (keys.has('ArrowLeft') || keys.has('KeyA')) dx -= 1;
+    if (keys.has('ArrowRight') || keys.has('KeyD')) dx += 1;
+    if (keys.has('ArrowUp') || keys.has('KeyW')) dz -= 1;
+    if (keys.has('ArrowDown') || keys.has('KeyS')) dz += 1;
+    return [dx, dz];
+  }
+
+  // ทิศที่อยากไป (จากคีย์บอร์ด หรือจุดที่แตะ) + ความเร็วสูงสุดที่อยากได้
+  function desiredMove(entry) {
+    const [kx, kz] = keyDirection();
+    if (kx || kz) {
+      walkTo = null;
+      if (entry.sit !== null) standUp();
+      return { dx: kx, dz: kz, want: running ? RUN_SPEED : WALK_SPEED };
+    }
+    if (!walkTo) return { dx: 0, dz: 0, want: 0 };
+    if (entry.sit !== null) standUp();
+    const dx = walkTo.x - entry.pos.x;
+    const dz = walkTo.z - entry.pos.z;
+    const left = Math.hypot(dx, dz);
+    if (left < 0.14) {
+      const seat = walkTo.seat;
+      walkTo = null;
+      if (seat !== undefined) sitOn(seat);
+      return { dx: 0, dz: 0, want: 0 };
+    }
+    // ใกล้ถึงแล้วค่อยๆ ชะลอ (ไม่หยุดกึก) แต่ไม่ช้าจนคลาน
+    return { dx, dz, want: WALK_SPEED * Math.min(1, Math.max(0.3, left / 0.9)) };
+  }
+
+  // ขยับไปตามความเร็ว แล้วดันออกจากของแข็ง/ตัวคนอื่น
+  function moveBy(entry, vx, vz, dt) {
+    let nx = clampX(entry.pos.x + vx * dt);
+    let nz = clampZ(entry.pos.z + vz * dt);
+    if (walkTo?.seat === undefined) [nx, nz] = pushOutOfBlocks(blocks, nx, nz); // เดินไปนั่ง = ผ่านโซฟาได้
+    for (const [id, other] of avatars) {
+      if (id === myId || other.sit !== null) continue;
+      const ox = nx - other.pos.x;
+      const oz = nz - other.pos.z;
+      const od = Math.hypot(ox, oz);
+      if (od < PERSONAL_SPACE && od > 1e-4) {
+        nx += (ox / od) * (PERSONAL_SPACE - od) * 0.5;
+        nz += (oz / od) * (PERSONAL_SPACE - od) * 0.5;
+      }
+    }
+    entry.pos.x = clampX(nx);
+    entry.pos.z = clampZ(nz);
+  }
 
   function updateMe(dt) {
     const entry = me();
     if (!entry) return;
     const prevX = entry.pos.x;
     const prevZ = entry.pos.z;
-    // ทิศที่อยากไป (จากคีย์บอร์ด หรือจุดที่แตะ) + ความเร็วสูงสุดที่อยากได้
-    let dx = 0;
-    let dz = 0;
-    let want = 0;
-    if (keys.has('ArrowLeft') || keys.has('KeyA')) dx -= 1;
-    if (keys.has('ArrowRight') || keys.has('KeyD')) dx += 1;
-    if (keys.has('ArrowUp') || keys.has('KeyW')) dz -= 1;
-    if (keys.has('ArrowDown') || keys.has('KeyS')) dz += 1;
-    if (dx || dz) {
-      walkTo = null;
-      if (entry.sit !== null) standUp();
-      want = running ? RUN_SPEED : WALK_SPEED;
-    } else if (walkTo) {
-      if (entry.sit !== null) standUp();
-      dx = walkTo.x - entry.pos.x;
-      dz = walkTo.z - entry.pos.z;
-      const left = Math.hypot(dx, dz);
-      if (left < 0.14) {
-        const seat = walkTo.seat;
-        walkTo = null;
-        dx = dz = 0;
-        if (seat !== undefined) sitOn(seat);
-      } else {
-        // ใกล้ถึงแล้วค่อยๆ ชะลอ (ไม่หยุดกึก) แต่ไม่ช้าจนคลาน
-        want = WALK_SPEED * Math.min(1, Math.max(0.3, left / 0.9));
-      }
-    }
+    const { dx, dz, want } = desiredMove(entry);
     const len = Math.hypot(dx, dz);
     const vel = entry.vel;
-    const goalX = len > 0 ? (dx / len) * want : 0;
-    const goalZ = len > 0 ? (dz / len) * want : 0;
     // เร่งเร็วกว่าชะลอนิดหน่อย → ออกตัวฉับไวแต่หยุดนุ่ม
     const k = 1 - Math.exp(-dt * (len > 0 ? 10 : 7));
-    vel.x += (goalX - vel.x) * k;
-    vel.z += (goalZ - vel.z) * k;
+    vel.x += ((len > 0 ? (dx / len) * want : 0) - vel.x) * k;
+    vel.z += ((len > 0 ? (dz / len) * want : 0) - vel.z) * k;
     const sp = Math.hypot(vel.x, vel.z);
     if (sp < 0.05 && len === 0) vel.x = vel.z = 0;
+    if (sp > 0.01) moveBy(entry, vel.x, vel.z, dt);
 
-    if (sp > 0.01) {
-      let nx = clampX(entry.pos.x + vel.x * dt);
-      let nz = clampZ(entry.pos.z + vel.z * dt);
-      if (walkTo?.seat === undefined) [nx, nz] = pushOutOfBlocks(nx, nz); // เดินไปนั่ง = ผ่านโซฟาได้
-      for (const [id, other] of avatars) { // ไม่เดินซ้อนตัวคนอื่น (ผลักออกนิ่มๆ)
-        if (id === myId || other.sit !== null) continue;
-        const ox = nx - other.pos.x;
-        const oz = nz - other.pos.z;
-        const od = Math.hypot(ox, oz);
-        if (od < PERSONAL_SPACE && od > 1e-4) {
-          nx += (ox / od) * (PERSONAL_SPACE - od) * 0.5;
-          nz += (oz / od) * (PERSONAL_SPACE - od) * 0.5;
-        }
-      }
-      entry.pos.x = clampX(nx);
-      entry.pos.z = clampZ(nz);
-    }
-    // ถ้าชนจนขยับไม่ได้จริง ให้ความเร็วที่โชว์ลดลงตาม (ไม่ก้าวขาอยู่กับที่)
+    // ชนจนขยับไม่ได้จริง → ความเร็วที่โชว์ลดลงตาม (ไม่ก้าวขาอยู่กับที่)
     const moved = Math.hypot(entry.pos.x - prevX, entry.pos.z - prevZ) / Math.max(dt, 0.001);
-    const shown = Math.min(sp, moved + 0.4);
-    entry.speed = shown / WALK_SPEED;
-    // หันหน้าไปทางที่เดิน (นุ่มๆ ไม่สะบัด)
+    entry.speed = Math.min(sp, moved + 0.4) / WALK_SPEED;
     if (sp > 0.25) entry.ry = angleLerp(entry.ry, Math.atan2(vel.x, vel.z), 1 - Math.exp(-dt * 12));
 
-    // วงกลมบอกจุดที่แตะ (เฉพาะเดินไปพื้น ไม่ใช่ที่นั่ง)
     marker.visible = Boolean(walkTo) && walkTo.seat === undefined;
     if (marker.visible) {
       marker.position.set(walkTo.x, 0.03, walkTo.z);
-      marker.scale.setScalar(1 + Math.sin(performance.now() / 180) * 0.08);
+      marker.scale.setScalar(1 + Math.sin(performance.now() / 180) * 0.1);
     }
   }
 
@@ -497,10 +444,39 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
         entry.pos.z += (z - entry.pos.z) * k;
       }
       entry.ry = angleLerp(entry.ry, ry, k);
-      // ความเร็วที่เห็นจากการเลื่อนตามแพ็กเก็ต (มาทุก ~100 ms) กระตุกง่าย → เฉลี่ยให้เนียน ท่าเดินจะไม่สั่น
+      // ความเร็วจากแพ็กเก็ต (มาทุก ~100 ms) กระตุกง่าย → เฉลี่ยให้เนียน ท่าเดินจะไม่สั่น
       const raw = Math.min(1.8, (dist / Math.max(dt, 0.001)) / WALK_SPEED) * (dist > 0.05 ? 1 : 0);
       entry.speed += (raw - entry.speed) * (1 - Math.exp(-dt * 7));
     }
+  }
+
+  // ---------- กล้องตามตัวเรา ----------
+  const focus = new THREE.Vector3(0, 0, 1);
+  const camOffset = new THREE.Vector3();
+  function cameraGoal() {
+    const entry = me();
+    return entry ? [entry.pos.x, entry.pos.z] : [0, 1];
+  }
+  function placeCamera() {
+    // จอแคบ (มือถือ) → ถอยกล้องให้เห็นรอบตัวกว้างขึ้น
+    const far = camera.aspect < 1 ? 1.45 : 1;
+    camOffset.set(0, 12 * far, 8.5 * far); // มุมก้มชัน (~55°) → ต้นไม้บังตัวละครน้อย
+    camera.position.copy(focus).add(camOffset);
+    camera.lookAt(focus.x, 0.6, focus.z);
+    sun.position.set(focus.x + 8, 18, focus.z + 10);
+    sun.target.position.set(focus.x, 0, focus.z);
+  }
+  function snapCamera() {
+    const [x, z] = cameraGoal();
+    focus.set(x, 0, z);
+    placeCamera();
+  }
+  function followCamera(dt) {
+    const [x, z] = cameraGoal();
+    const k = 1 - Math.exp(-dt * 4);
+    focus.x += (x - focus.x) * k;
+    focus.z += (z - focus.z) * k;
+    placeCamera();
   }
 
   // ---------- วาดทุกเฟรม ----------
@@ -508,7 +484,7 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
   function placeTags(width, height) {
     for (const entry of avatars.values()) {
       headPoint.set(entry.pos.x, HEAD_TOP + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z).project(camera);
-      const visible = headPoint.z < 1;
+      const visible = headPoint.z < 1 && Math.abs(headPoint.x) < 1.1 && Math.abs(headPoint.y) < 1.1;
       entry.tag.node.style.visibility = visible ? 'visible' : 'hidden';
       if (!visible) continue;
       const x = ((headPoint.x + 1) / 2) * width;
@@ -521,21 +497,17 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
   function fitCamera() {
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
+    // ความละเอียดต่ำแล้วให้ CSS ขยายแบบ pixelated (ดู .lounge-view canvas)
+    renderer.setPixelRatio(Math.min(1, PIXEL_HEIGHT / h));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
-    // จอแคบ (มือถือ) → ถอยกล้องให้เห็นห้องทั้งกว้าง
-    const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-    const fitWidth = (HALF_X + 0.4) / Math.tan(hFov / 2);
-    const dist = Math.max(10.5, fitWidth * 0.9);
-    camera.position.set(0, dist * 0.55, dist * 0.84);
-    camera.lookAt(0, 0.2, 0.2);
     camera.updateProjectionMatrix();
+    placeCamera();
   }
   new ResizeObserver(fitCamera).observe(container);
 
   let visible = true;
-  let onScreen = true; // เห็นห้องเกินครึ่งเมื่อไหร่ ปุ่มลูกศร/Space ถึงเป็นของตัวละคร (ไม่งั้นปล่อยให้เลื่อนหน้าได้ตามปกติ)
+  let onScreen = true; // เห็นลานเกินครึ่งเมื่อไหร่ ปุ่มลูกศร/Space ถึงเป็นของตัวละคร (ไม่งั้นปล่อยให้เลื่อนหน้าได้ตามปกติ)
   new IntersectionObserver(([e]) => {
     visible = e.isIntersecting;
     onScreen = e.intersectionRatio >= 0.5;
@@ -549,24 +521,26 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
     last = now;
     updateMe(dt);
     sendPose(now);
+    checkPickup(now);
     if (!visible) return;
     updateOthers(dt);
     for (const entry of avatars.values()) {
       const seated = entry.sit !== null;
-      if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่กระโดดวูบ
-      // ลงนั่ง/ลุก = ค่อยๆ เปลี่ยน (sitAmount 0→1) แทนการวาร์ปไปที่นั่ง
+      if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
       entry.av.root.position.set(entry.pos.x, (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z);
       entry.av.root.rotation.y = entry.ry;
       entry.av.update(dt, { speed: entry.speed, seated });
     }
-    const beat = music ? 1 + Math.abs(Math.sin(now / 160)) * 0.12 : 1;
-    for (const cone of speakers) cone.scale.setScalar(beat);
+    animateGround(now);
+    const beat = music ? 1 + Math.abs(Math.sin(now / 160)) * 0.15 : 1;
+    for (const cone of speakers) cone.scale.set(beat, beat, 1);
+    followCamera(dt);
     renderer.render(scene, camera);
     placeTags(container.clientWidth, container.clientHeight);
   }
   requestAnimationFrame(frame);
 
-  // ---------- input ----------
+  // ---------- input: แตะพื้น = เดิน · แตะที่นั่ง = ไปนั่ง ----------
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let downAt = null;
@@ -589,38 +563,38 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
     if (floorHit) walkTo = { x: clampX(floorHit.point.x), z: clampZ(floorHit.point.z) };
   });
 
+  // ---------- คีย์บอร์ด: รับทั้งหน้าเว็บ ไม่ต้องคลิกที่ลานก่อน ----------
+  // ยกเว้น: กำลังพิมพ์ / โฟกัสอยู่ที่ตัวควบคุมที่ใช้ปุ่มเหล่านี้เอง
   const MOVE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS']);
-  // รับปุ่มทั้งหน้าเว็บ ไม่ต้องคลิกที่ห้องก่อน · ยกเว้น: กำลังพิมพ์ / โฟกัสอยู่ที่ตัวควบคุมที่ใช้ปุ่มเหล่านี้เอง
+  const ACTION_KEYS = { Space: () => gesture('jump'), KeyF: () => gesture('punch'), KeyE: toggleSit, KeyG: dropHeld };
   const isTyping = (t) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   const ownsArrows = (t) => t instanceof HTMLElement && Boolean(t.closest('[role="tablist"], [role="radiogroup"]'));
   const isButton = (t) => t instanceof HTMLElement && /^(BUTTON|A|SUMMARY)$/.test(t.tagName);
   const canControl = (e) => me() && onScreen && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(e.target);
+  // แตะปุ่มสั้นมาก (กด-ปล่อยจบก่อนเฟรมถัดไป) ต้องยังเดินได้ ≥ 1 ก้าว → ค้างปุ่มไว้อย่างน้อย MIN_HOLD_MS
+  const MIN_HOLD_MS = 110;
+  const pressedAt = new Map();
+  const releaseTimers = new Map();
 
   window.addEventListener('keydown', (e) => {
     running = e.shiftKey;
     if (!canControl(e)) return;
     if (MOVE_KEYS.has(e.code)) {
       if (ownsArrows(e.target)) return;
+      clearTimeout(releaseTimers.get(e.code)); // กดซ้ำเร็วๆ อย่าให้การปล่อยครั้งก่อนมาตัด
       if (!keys.has(e.code)) pressedAt.set(e.code, performance.now());
       keys.add(e.code);
-    } else if (e.code === 'Space') {
-      if (isButton(e.target)) return; // Space บนปุ่ม = กดปุ่มตามปกติ
-      if (!e.repeat) gesture('jump');
-    } else if (e.code === 'KeyF') {
-      if (!e.repeat) gesture('punch');
-    } else if (e.code === 'KeyE') {
-      if (!e.repeat) toggleSit();
+    } else if (ACTION_KEYS[e.code]) {
+      if (e.code === 'Space' && isButton(e.target)) return; // Space บนปุ่ม = กดปุ่มตามปกติ
+      if (!e.repeat) ACTION_KEYS[e.code]();
     } else return;
     e.preventDefault();
   });
-  // แตะปุ่มสั้นมาก (กด-ปล่อยจบก่อนเฟรมถัดไป) ต้องยังเดินได้ ≥ 1 ก้าว → ค้างปุ่มไว้อย่างน้อย MIN_HOLD_MS
-  const MIN_HOLD_MS = 110;
-  const pressedAt = new Map();
   window.addEventListener('keyup', (e) => {
     running = e.shiftKey;
     const held = performance.now() - (pressedAt.get(e.code) ?? 0);
     if (held >= MIN_HOLD_MS) keys.delete(e.code);
-    else setTimeout(() => keys.delete(e.code), MIN_HOLD_MS - held);
+    else releaseTimers.set(e.code, setTimeout(() => keys.delete(e.code), MIN_HOLD_MS - held));
   });
   const releaseKeys = () => {
     keys.clear();
@@ -631,13 +605,15 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
 
   return {
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
-    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit })),
+    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held() })),
+    debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
-    reset(list, you) {
+    reset(list, you, items = []) {
       for (const id of [...avatars.keys()]) remove(id);
       myId = you;
       lastSent = '';
       list.forEach(add);
+      setItems(items);
     },
     add,
     remove,
@@ -660,6 +636,9 @@ export function createLounge(container, { onPose, onGesture, onNotice }) {
     say(id, text) {
       avatars.get(id)?.tag.say(text);
     },
+    setItems,
+    setHeld,
+    dropHeld,
     gesture,
     toggleSit,
     setMyLook(look) {

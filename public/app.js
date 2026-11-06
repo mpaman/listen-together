@@ -79,7 +79,7 @@ function join() {
   socket.emit('join', { room: roomId, name: $('gate-name').value, look: myLook }, (res) => {
     if (res?.error) return ui.toast(res.error);
     joined = true;
-    lounge?.reset(res.avatars ?? [], res.you);
+    lounge?.reset(res.avatars ?? [], res.you, res.items ?? []);
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
     renderUsers(res.users);
@@ -128,6 +128,8 @@ socket.on('avatar:leave', ({ id }) => lounge?.remove(id));
 socket.on('avatar:look', ({ id, look }) => lounge?.look(id, look));
 socket.on('pose', (pose) => lounge?.pose(pose));
 socket.on('gesture', ({ id, type }) => lounge?.remoteGesture(id, type));
+socket.on('items', (items) => lounge?.setItems(items));
+socket.on('avatar:held', ({ id, kind }) => lounge?.setHeld(id, kind));
 
 // ---------- แชท ----------
 function onChat(msg) {
@@ -196,6 +198,8 @@ async function initLounge() {
       onPose: (pose) => joined && socket.emit('pose', pose),
       onGesture: (type) => joined && socket.emit('gesture', type),
       onNotice: (text) => ui.toast(text),
+      onPick: (id) => joined && socket.emit('item:pick', id),
+      onDrop: () => joined && socket.emit('item:drop'),
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {
@@ -207,6 +211,7 @@ async function initLounge() {
     btn.addEventListener('click', () => lounge.gesture(btn.dataset.gesture));
   }
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
+  document.querySelector('.lounge-actions [data-act="drop"]').addEventListener('click', () => lounge.dropHeld());
   $('reroll').addEventListener('click', () => {
     myLook = saveLook(randomLook());
     lounge.setMyLook(myLook);
