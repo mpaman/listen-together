@@ -46,11 +46,31 @@ function songRow(item, sub) {
 }
 
 // ---------- ผลค้นหา (popover) ----------
-export function renderResults(items, label, onAdd) {
+// onAddAll (ถ้ามี) = ผลจาก playlist → มีปุ่ม "เพิ่มทั้งหมด" แถวบนสุด
+export function renderResults(items, label, onAdd, { onAddAll } = {}) {
   $('results-label').textContent = label;
   const list = $('results');
   list.replaceChildren();
   if (items.length === 0) list.append(el('li', 'empty', 'ไม่เจอเพลงที่ตรงกัน'));
+  if (onAddAll && items.length > 0) {
+    const all = el('button', 'add-all', `เพิ่มทั้งหมด ${items.length} เพลง`);
+    all.type = 'button';
+    all.prepend(icon('plus'));
+    all.addEventListener('click', () => {
+      onAddAll();
+      all.replaceChildren(icon('check'), document.createTextNode(`เพิ่ม ${items.length} เพลงแล้ว`));
+      all.disabled = true;
+      // ปุ่มรายเพลงกดซ้ำไม่ได้แล้ว (กันเพิ่มซ้ำ)
+      for (const btn of list.querySelectorAll('.add')) {
+        btn.replaceChildren(icon('check'));
+        btn.classList.add('is-done');
+        btn.disabled = true;
+      }
+    });
+    const li = el('li', 'add-all-row');
+    li.append(all);
+    list.append(li);
+  }
   for (const item of items) {
     const { row } = songRow(item, item.channel || 'YouTube');
     const add = iconButton('plus', `เพิ่ม ${item.title} เข้าคิว`, 'icon-btn add');
@@ -298,6 +318,7 @@ function eventText(ev) {
     case 'move': return ev.title ? `${by} ย้าย “${ev.title}”` : `${by} เรียงคิวใหม่`;
     case 'mode': return `${by} ตั้งเมื่อคิวหมด: ${MODE_LABEL[ev.mode] ?? ev.mode}`;
     case 'autofill': return `ต่อเพลงแนวเดียวกันให้ ${ev.count} เพลง`;
+    case 'addMany': return `${by} เพิ่ม ${ev.count} เพลงจาก playlist`;
     case 'blocked': return 'ข้ามเพลงที่เล่นในเว็บนี้ไม่ได้';
     default: return null;
   }

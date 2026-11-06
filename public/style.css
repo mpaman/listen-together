@@ -1035,3 +1035,30 @@ body.is-playing .game-play .icon-pause { display: block; }
 .game-close { flex: none; }
 .game .lounge { margin: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .game .lounge-view { flex: 1; min-height: 0; aspect-ratio: auto; }
+
+/* ---------- ปุ่มเสียงเตือนแชท (ข้างแท็บ คิว|แชท) ---------- */
+.tabs-row { display: flex; align-items: center; gap: 8px; }
+.tabs-row .tabs { flex: 1; }
+.chat-sound { flex: none; color: var(--muted); }
+.chat-sound .icon-off, .chat-sound[aria-pressed='false'] .icon-on { display: none; }
+.chat-sound[aria-pressed='false'] .icon-off { display: block; color: var(--faint); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- ปุ่ม "เพิ่มทั้งหมด" ในผล playlist ---------- */
+.add-all-row { padding: 4px 4px 8px; }
+.add-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 40px;
+  border-radius: var(--r-row);
+  background: var(--amber);
+  color: #1a1410;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.add-all .icon { width: 18px; height: 18px; }
+.add-all:hover:not(:disabled) { background: var(--amber-hover); }
+.add-all:disabled { background: var(--surface-3); color: var(--mint); }

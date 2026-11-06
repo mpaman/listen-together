@@ -9,6 +9,7 @@ const MAX_ROOM_LEN = 32;
 const MAX_NAME = 24;
 const MAX_TITLE = 200;
 const MAX_POSITION_SEC = 24 * 60 * 60;
+const MAX_ADD_MANY = 100; // = PLAYLIST_MAX ใน youtube.js
 const ID_ACTIONS = new Set(['jump', 'remove', 'ended', 'blocked']);
 const PLAIN_ACTIONS = new Set(['play', 'pause', 'next', 'prev']);
 
@@ -61,6 +62,12 @@ export function sanitizeAction(raw, addedBy) {
   if (type === 'add') {
     if (!isVideoId(raw.item?.videoId)) return null;
     return { type, item: makeQueueItem(raw.item, addedBy) };
+  }
+  // เพิ่มทั้ง playlist ในครั้งเดียว (ส่งทีละเพลงจะชน rate limit 10 ครั้ง/วิ) · เพลงที่ id ไม่ถูกตัดทิ้ง
+  if (type === 'addMany') {
+    if (!Array.isArray(raw.items)) return null;
+    const items = raw.items.slice(0, MAX_ADD_MANY).filter((item) => isVideoId(item?.videoId)).map((item) => makeQueueItem(item, addedBy));
+    return items.length ? { type, items } : null;
   }
   if (type === 'move') {
     const to = Number(raw.to);

@@ -6,6 +6,7 @@ import { createPlayer } from './player.js';
 import { isRoomId, normalizeRoomId, suggestRoomName } from './room-name.js';
 import { createSyncer, currentItem, expectedPosition } from './sync.js';
 import { createQueueDrag } from './queue-drag.js';
+import { createNotifier } from './notify.js';
 import { randomLook } from './lounge-avatar.js';
 import * as ui from './ui.js';
 
@@ -36,6 +37,7 @@ let unread = 0;
 const mySocketIds = new Set();
 const isMine = (msg) => mySocketIds.has(msg.bySocket);
 const CHAT_TOAST_LEN = 60;
+const notifier = createNotifier();
 let lounge = null; // ห้อง 3D (null = เครื่องนี้เปิด WebGL ไม่ได้ → ใช้แบบไม่มีห้อง 3D)
 let myLook = loadLook();
 
@@ -137,6 +139,7 @@ function onChat(msg) {
   const mine = isMine(msg);
   ui.appendChatMessage(msg, mine);
   lounge?.say(msg.bySocket, msg.text);
+  if (!mine) notifier.chat(); // อยู่แท็บอื่น → ติ๊ง + ตัวเลขบนชื่อแท็บ
   if (mine || (activeTab === 'chat' && !document.hidden)) return;
   unread += 1;
   ui.setUnread(unread);
@@ -172,6 +175,14 @@ function bindChat() {
   });
   // กลับมาที่แท็บเบราว์เซอร์ขณะเปิดแชทอยู่ = อ่านแล้ว
   document.addEventListener('visibilitychange', () => !document.hidden && activeTab === 'chat' && showTab('chat'));
+  const soundBtn = $('chat-sound');
+  const renderSound = () => soundBtn.setAttribute('aria-pressed', String(notifier.isEnabled()));
+  soundBtn.addEventListener('click', () => {
+    notifier.setEnabled(!notifier.isEnabled());
+    renderSound();
+    ui.toast(notifier.isEnabled() ? 'เปิดเสียงเตือนแชทแล้ว (ดังตอนอยู่แท็บอื่น)' : 'ปิดเสียงเตือนแชทแล้ว');
+  });
+  renderSound();
   $('chat-form').addEventListener('submit', (e) => {
     e.preventDefault();
     sendChat($('chat-input'));
@@ -310,14 +321,35 @@ async function getJson(url) {
   return body;
 }
 
-const addToQueue = (item) => send({ type: 'add', item: { videoId: item.videoId, title: item.title, channel: item.channel } });
+const songOf = (item) => ({ videoId: item.videoId, title: item.title, channel: item.channel });
+const addToQueue = (item) => send({ type: 'add', item: songOf(item) });
+// ส่งทั้งชุดเป็น action เดียว (server เพิ่มรวดเดียว คิวไม่กระพริบทีละเพลง)
+const addAllToQueue = (items) => send({ type: 'addMany', items: items.map(songOf) });
+const hasPlaylist = (text) => /[?&]list=[A-Za-z0-9_-]{10,}/.test(text);
+
+// ลิงก์ที่มี list= → แสดงทั้ง playlist ให้กด "เพิ่มทั้งหมด" ได้
+// ถ้าดึงไม่ได้ (Mix อัตโนมัติ / ส่วนตัว) แต่ลิงก์มีเพลงเดี่ยวอยู่ด้วย → ถอยไปเพิ่มเพลงเดี่ยวนั้นแทน
+async function showPlaylist(q) {
+  try {
+    const { items } = await getJson(`/api/playlist?u=${encodeURIComponent(q)}`);
+    ui.renderResults(items, `Playlist · ${items.length} เพลง`, addToQueue, { onAddAll: () => addAllToQueue(items) });
+    return '';
+  } catch (err) {
+    if (!/[?&]v=/.test(q)) throw err;
+    const { item } = await getJson(`/api/resolve?u=${encodeURIComponent(q)}`);
+    ui.renderResults([item], 'จากลิงก์ (เพลงเดียว)', addToQueue);
+    return `${err.message} — แสดงเฉพาะเพลงในลิงก์`;
+  }
+}
 
 async function runSearch(text) {
   const q = text.trim();
   if (!q) return;
   ui.setHint('กำลังค้น…');
   try {
-    if (looksLikeLink(q)) {
+    if (hasPlaylist(q)) {
+      return ui.setHint(await showPlaylist(q));
+    } else if (looksLikeLink(q)) {
       const { item } = await getJson(`/api/resolve?u=${encodeURIComponent(q)}`);
       ui.renderResults([item], 'จากลิงก์', addToQueue);
     } else if (searchEnabled) {
@@ -374,6 +406,7 @@ function enterGate(pickedId = null) {
     // ไม่เป็นไร
   }
   player?.unmute();
+  notifier.unlock(); // จังหวะนี้มีการกดของผู้ใช้ → browser ยอมให้เสียงเตือนแชทดังได้
   $('gate').classList.add('is-leaving');
   setTimeout(() => ($('gate').hidden = true), 200);
   join();

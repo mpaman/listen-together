@@ -62,12 +62,14 @@ export function needsAutofill(state) {
   return findPlayable(state.queue, indexOfCurrent(state) + 1, 1) === null;
 }
 
-function autofill(state, items, now) {
+// ต่อท้ายคิวหลายเพลง (เติมอัตโนมัติ / เพิ่มทั้ง playlist) · คิวเต็มก็รับเท่าที่ใส่ได้
+// ยังไม่มีเพลงเล่น หรือคิวจบไปแล้ว → เริ่มเล่นเพลงแรกที่เพิ่งเพิ่ม
+function appendItems(state, items, now) {
   const room = MAX_QUEUE - state.queue.length;
   if (room <= 0 || items.length === 0) return state;
   const added = items.slice(0, room);
   const next = { ...state, queue: [...state.queue, ...added] };
-  return state.finished ? startItem(next, added[0].id, now) : next;
+  return state.currentId === null || state.finished ? startItem(next, added[0].id, now) : next;
 }
 
 function goPrev(state, now) {
@@ -154,7 +156,8 @@ function applyAction(state, action, now) {
       return state.whenEmpty === action.mode ? state : { ...state, whenEmpty: action.mode };
     // มาจาก server เท่านั้น (sanitizeAction ไม่ยอมให้ client ส่ง type นี้)
     case 'autofill':
-      return autofill(state, action.items, now);
+    case 'addMany':
+      return appendItems(state, action.items, now);
     default:
       return state;
   }

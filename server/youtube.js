@@ -10,6 +10,61 @@ const FETCH_TIMEOUT_MS = 8000;
 
 export const isVideoId = (value) => typeof value === 'string' && VIDEO_ID_RE.test(value);
 
+// ---------- playlist ----------
+const PLAYLIST_ID_RE = /^[A-Za-z0-9_-]{10,64}$/;
+export const PLAYLIST_MAX = 100; // ดึงสูงสุดต่อครั้ง (2 หน้า × 50 = 2 หน่วยโควต้า)
+const PLAYLIST_PAGE = 50;
+
+// คืน id จากลิงก์ที่มี ?list= (youtube.com/playlist, watch?v=..&list=.., music.youtube.com) หรือ null
+export function parsePlaylistId(input) {
+  let url;
+  try {
+    const text = String(input ?? '').trim();
+    url = new URL(text.startsWith('http') ? text : `https://${text}`);
+  } catch {
+    return null;
+  }
+  if (!YT_HOSTS.has(url.hostname.toLowerCase())) return null;
+  const id = url.searchParams.get('list');
+  return PLAYLIST_ID_RE.test(id ?? '') ? id : null;
+}
+
+// Mix ที่ YouTube สร้างให้อัตโนมัติ (RD...) API ไม่ยอมให้ดึงรายการ → บอกผู้ใช้แทนการ error งงๆ
+export const isAutoMix = (playlistId) => playlistId.startsWith('RD');
+
+// แปลงผลจาก playlistItems → รายการเพลง · ตัดคลิปที่ถูกลบ/ส่วนตัว (ไม่มีชื่อช่องเจ้าของ) และ id ซ้ำ
+export function mapPlaylistItems(items) {
+  const seen = new Set();
+  const songs = [];
+  for (const item of items ?? []) {
+    const snippet = item?.snippet ?? {};
+    const videoId = snippet.resourceId?.videoId;
+    if (!isVideoId(videoId) || !snippet.videoOwnerChannelTitle || seen.has(videoId)) continue;
+    seen.add(videoId);
+    songs.push({
+      videoId,
+      title: decodeEntities(snippet.title),
+      channel: decodeEntities(snippet.videoOwnerChannelTitle),
+      thumb: thumbnailFor(videoId),
+    });
+  }
+  return songs;
+}
+
+export async function fetchPlaylist(playlistId, apiKey) {
+  const raw = [];
+  let pageToken = '';
+  while (raw.length < PLAYLIST_MAX) {
+    const params = new URLSearchParams({ part: 'snippet', playlistId, maxResults: String(PLAYLIST_PAGE), key: apiKey });
+    if (pageToken) params.set('pageToken', pageToken);
+    const data = await fetchJson(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`);
+    raw.push(...(data.items ?? []));
+    pageToken = data.nextPageToken ?? '';
+    if (!pageToken) break;
+  }
+  return mapPlaylistItems(raw).slice(0, PLAYLIST_MAX);
+}
+
 export const thumbnailFor = (videoId) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 
 // รับได้ทั้ง id ล้วน, youtube.com/watch?v=, music.youtube.com/watch?v=, youtu.be/, /shorts/, /embed/

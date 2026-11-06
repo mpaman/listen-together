@@ -8,7 +8,7 @@ import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
-import { resolveLink, search, suggest } from './youtube.js';
+import { fetchPlaylist, isAutoMix, parsePlaylistId, resolveLink, search, suggest } from './youtube.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.YOUTUBE_API_KEY ?? '';
@@ -77,6 +77,22 @@ app.get('/api/resolve', async (req, res) => {
   }
 });
 
+// วางลิงก์ playlist → คืนรายการเพลง (ใช้ playlistItems: 1 หน่วยต่อ 50 เพลง ถูกกว่าค้นทีละเพลงมาก)
+app.get('/api/playlist', async (req, res) => {
+  const playlistId = parsePlaylistId(String(req.query.u ?? '').slice(0, 300));
+  if (!playlistId) return res.status(400).json({ error: 'ไม่ใช่ลิงก์ playlist ของ YouTube' });
+  if (isAutoMix(playlistId)) return res.status(400).json({ error: 'Mix ที่ YouTube สร้างให้อัตโนมัติดึงรายการไม่ได้ — ใช้ playlist ที่สร้างเองแทน' });
+  if (!API_KEY) return res.status(503).json({ error: 'ยังไม่ได้ตั้ง YOUTUBE_API_KEY — ดึง playlist ไม่ได้' });
+  try {
+    const items = await fetchPlaylist(playlistId, API_KEY);
+    return items.length ? res.json({ items }) : res.status(404).json({ error: 'playlist นี้ไม่มีเพลงที่เปิดได้' });
+  } catch (err) {
+    console.error('[playlist]', err.message);
+    const notFound = err.status === 404 || err.status === 403;
+    return res.status(notFound ? 404 : 502).json({ error: notFound ? 'หา playlist ไม่เจอ หรือเป็นแบบส่วนตัว' : 'ดึง playlist ไม่สำเร็จ' });
+  }
+});
+
 const httpServer = createServer(app);
 const io = new Server(httpServer);
 
@@ -121,7 +137,7 @@ const GESTURE_LIMIT_PER_SEC = 4;
 function describeEvent(action, actor, seq, state) {
   const event = { seq, type: action.type, by: actor.name, bySocket: actor.socketId };
   if (action.type === 'add') event.title = action.item.title;
-  if (action.type === 'autofill') event.count = action.items.length;
+  if (action.type === 'autofill' || action.type === 'addMany') event.count = action.items.length;
   if (action.type === 'mode') event.mode = action.mode;
   if (action.type === 'move') event.title = state.queue.find((item) => item.id === action.id)?.title;
   return event;
