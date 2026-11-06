@@ -31,6 +31,7 @@
     <symbol id="i-chat" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5h-8l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path fill="currentColor" d="M4.4 4.6a.8.8 0 0 1 1.05-.95l14.3 7.6a.8.8 0 0 1 0 1.42l-14.3 7.6a.8.8 0 0 1-1.05-.95L6.3 12.6l7.2-.6-7.2-.6z"/></symbol>
     <symbol id="i-grip" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="9" cy="6.5" r="1.6"/><circle cx="15" cy="6.5" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="17.5" r="1.6"/><circle cx="15" cy="17.5" r="1.6"/></g></symbol>
+    <symbol id="i-game" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7.5h10a4.5 4.5 0 0 1 4.4 5.5l-.9 4a2.6 2.6 0 0 1-4.6 1.1L14.5 16h-5l-1.4 2.1a2.6 2.6 0 0 1-4.6-1.1l-.9-4A4.5 4.5 0 0 1 7 7.5z"/><path d="M8 11v3M6.5 12.5h3"/></g><g fill="currentColor"><circle cx="15.5" cy="11.5" r="1"/><circle cx="17.5" cy="13.5" r="1"/></g></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 11 12 4.5 20 11v8a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/></symbol>
     <symbol id="i-dice" viewBox="0 0 24 24"><g fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="15" cy="9" r="1.5"/><circle cx="9" cy="15" r="1.5"/></g></symbol>
     <!-- ท่าทางในห้อง 3D: เส้น 2px ปลายมน ชุดเดียวกับไอคอนด้านบน -->
@@ -54,6 +55,10 @@
       <span class="brand-name">ฟังเพลงกับ <em>chok</em></span>
     </a>
     <div class="topbar-end">
+      <button class="room-btn game-btn" id="game-open" type="button" aria-haspopup="dialog" aria-controls="game">
+        <svg class="icon" aria-hidden="true"><use href="#i-game"/></svg>
+        <span>เล่นเกม</span>
+      </button>
       <a class="room-btn home-btn" href="/">
         <svg class="icon" aria-hidden="true"><use href="#i-home"/></svg>
         <span>ห้องอื่น</span>
@@ -117,7 +122,21 @@
         </div>
       </div>
 
-      <!-- ห้องนั่งเล่น 3D: ตัวละครของทุกคนในห้อง -->
+      <!-- มินิเกมลาน 3D: ซ่อนไว้ กดปุ่ม "เล่นเกม" ถึงเปิดทับทั้งจอ — ตัวเล่น YouTube ข้างหลังไม่ถูกแตะ เพลงเลยเล่นต่อ -->
+      <div class="game" id="game" role="dialog" aria-modal="true" aria-labelledby="game-title" hidden>
+      <header class="game-head">
+        <h2 class="game-title" id="game-title">ลานเล่น</h2>
+        <div class="game-now">
+          <button class="icon-btn game-play" id="game-play" type="button" aria-label="เล่น/หยุดเพลง">
+            <svg class="icon icon-play" aria-hidden="true"><use href="#i-play"/></svg>
+            <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause"/></svg>
+          </button>
+          <span class="game-song" id="game-song">ยังไม่มีเพลง</span>
+        </div>
+        <button class="icon-btn game-close" id="game-close" type="button" aria-label="ปิดเกม (เพลงยังเล่นต่อ)">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </header>
       <section class="lounge" id="lounge-section" aria-label="ห้องนั่งเล่น 3D">
         <div class="lounge-view" id="lounge" tabindex="0" aria-label="ห้อง 3D — คลิกพื้นเพื่อเดิน คลิกโซฟาเพื่อนั่ง ลูกศรหรือ WASD เดิน กด Shift ค้างเพื่อวิ่ง Space กระโดด F ต่อย E นั่ง G วางของ">
           <canvas></canvas>
@@ -152,6 +171,7 @@
           </form>
         </div>
       </section>
+      </div>
     </section>
 
     <aside class="panel" aria-label="ค้นเพลง คิว และแชท">

@@ -99,6 +99,7 @@ function applyState(next, force = false) {
   ui.renderNowPlaying(room);
   ui.renderMode(room.whenEmpty);
   lounge?.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
+  $('game-song').textContent = currentItem(room)?.title ?? 'ยังไม่มีเพลง';
   syncer?.reconcile(room, clock.serverNow());
 }
 
@@ -186,6 +187,26 @@ function sendChat(input) {
     if (!res?.error) return;
     if (!input.value) input.value = text; // ส่งไม่ผ่าน → คืนข้อความให้ ไม่ต้องพิมพ์ใหม่
     ui.toast(res.error);
+  });
+}
+
+// ---------- มินิเกม (ลาน 3D แบบเปิดทับจอ) ----------
+// ไม่ย้าย/ซ่อนตัวเล่น YouTube → เพลงเล่นต่อตลอด · ปิดแล้วลานหยุดวาด (IntersectionObserver ใน lounge.js) ประหยัดแบต
+function setGameOpen(open) {
+  const game = $('game');
+  if (game.hidden === !open) return;
+  game.hidden = !open;
+  document.body.classList.toggle('is-gaming', open);
+  if (open) $('lounge').focus({ preventScroll: true });
+  else $('game-open').focus();
+}
+
+function bindGame() {
+  $('game-open').addEventListener('click', () => setGameOpen(true));
+  $('game-close').addEventListener('click', () => setGameOpen(false));
+  $('game-play').addEventListener('click', () => $('btn-play').click());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('game').hidden) setGameOpen(false);
   });
 }
 
@@ -439,6 +460,7 @@ async function main() {
     onEnd: () => queueDirty && room && renderQueue(),
   });
   bindRoomLink();
+  bindGame();
   initLounge();
   getJson('/api/config')
     .then((cfg) => {

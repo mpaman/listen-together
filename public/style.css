@@ -1000,3 +1000,38 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .btn-primary, .ctrl-main, .search-go, .act, .emo { transition: none; }
 }
+
+/* ---------- มินิเกม: ลาน 3D เปิดทับทั้งจอ (เพลงข้างหลังเล่นต่อ) ---------- */
+.game-btn { color: var(--text); }
+.game {
+  position: fixed;
+  inset: 0;
+  z-index: 25; /* ใต้ toast (แจ้งเตือนยังเห็น) เหนือหน้าหลัก */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px clamp(12px, 3vw, 28px) 16px;
+  background: var(--bg);
+  animation: pop-in 240ms var(--ease-out);
+}
+.game[hidden] { display: none; }
+body.is-gaming { overflow: hidden; }
+.game-head { display: flex; align-items: center; gap: 12px; }
+.game-title { margin: 0; font-family: var(--font-display); font-size: 1.1rem; flex: none; }
+.game-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  padding: 2px 12px 2px 2px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.game-song { min-width: 0; font-size: 0.82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.game-play .icon-pause, body.is-playing .game-play .icon-play { display: none; }
+body.is-playing .game-play .icon-pause { display: block; }
+.game-close { flex: none; }
+.game .lounge { margin: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.game .lounge-view { flex: 1; min-height: 0; aspect-ratio: auto; }
