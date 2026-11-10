@@ -8,6 +8,7 @@ import { createSyncer, currentItem, expectedPosition } from './sync.js';
 import { createQueueDrag } from './queue-drag.js';
 import { createNotifier } from './notify.js';
 import { randomLook } from './lounge-avatar.js';
+import { createHostLink } from './host-link.js';
 import * as ui from './ui.js';
 
 const TICK_MS = 400;
@@ -86,6 +87,7 @@ function join() {
     applyState(res.state, true);
     renderUsers(res.users);
     ui.renderChatHistory(res.chat ?? [], isMine);
+    if (wantHost) requestHost({ silent: true }); // หลุดแล้วต่อใหม่ระหว่างเป็น host → ขอคืน (server รอไว้ 30 วิ)
   });
 }
 
@@ -97,6 +99,13 @@ function applyState(next, force = false) {
     lastEventSeq = ev.seq;
     if (ev.bySocket !== socket.id) ui.toastEvent(ev); // ของที่เรากดเองไม่ต้องเด้งบอกตัวเอง
   }
+  // host ของห้องไม่ใช่ socket ไหนของเราแล้ว (ถูกแย่ง/หมดเวลารอ) → เลิกทำตัวเป็น host
+  // เช็คกับ mySocketIds เพราะตอนต่อใหม่ host ยังเป็น socket เก่าของเราอยู่ (กำลังขอคืน)
+  if (isHosting && !mySocketIds.has(room.host?.socketId)) {
+    wantHost = false;
+    setHosting(false);
+  }
+  renderHost();
   renderQueue();
   ui.renderNowPlaying(room);
   ui.renderMode(room.whenEmpty);
@@ -133,6 +142,108 @@ socket.on('pose', (pose) => lounge?.pose(pose));
 socket.on('gesture', ({ id, type }) => lounge?.remoteGesture(id, type));
 socket.on('items', (items) => lounge?.setItems(items));
 socket.on('avatar:held', ({ id, kind }) => lounge?.setHeld(id, kind));
+// ถูกแย่ง host: ไม่ต้องเด้งข้อความเอง — event hostStart ของห้อง ("X แย่ง host จาก Y") เด้งให้อยู่แล้ว
+socket.on('host:kicked', () => {
+  wantHost = false;
+  setHosting(false);
+});
+
+// ---------- ฟังตามผม (host) ----------
+// เครื่อง host: extension อ่านเพลงจากแท็บ YouTube Music → ส่งเข้าหน้านี้ → หน้านี้ส่งต่อ server ด้วย socket ที่มีอยู่
+// (ใช้ socket ของหน้าเว็บ ไม่ให้ extension ต่อ server เอง — server รู้ตัว host จาก socket.id ตรงๆ ไม่ต้องมีรหัสลับ)
+const YTM_STALE_MS = 4000;
+let isHosting = false; // server ยืนยันแล้วว่าเครื่องนี้เป็น host
+let wantHost = false; // ผู้ใช้กดเป็น host ไว้ — ใช้ขอคืนเองตอนต่อใหม่
+let lastYtmAt = 0;
+let lastHostSong = null; // { videoId, position } ล่าสุดที่ไม่ใช่โฆษณา
+const hostLink = createHostLink({ onYtm: onYtmState });
+const isYtmLive = () => Date.now() - lastYtmAt < YTM_STALE_MS;
+
+function onYtmState(s) {
+  if (!isHosting || !joined || typeof s.videoId !== 'string') return;
+  const wasLive = isYtmLive();
+  lastYtmAt = Date.now();
+  if (!wasLive) renderHost();
+  let position = Number(s.position) || 0;
+  let isPlaying = s.isPlaying === true;
+  if (s.isAd) {
+    // host ติดโฆษณา → ให้ห้องหยุดรอที่จุดเดิมของเพลง (ไม่งั้นเพื่อนจะเล่นนำไปก่อน)
+    isPlaying = false;
+    position = lastHostSong?.videoId === s.videoId ? lastHostSong.position : 0;
+  } else {
+    lastHostSong = { videoId: s.videoId, position };
+  }
+  // s.at = เวลาเครื่องเรา ตอนที่ extension อ่านค่า → แปลงเป็นเวลา server ด้วย offset ของ clock.js
+  const sampledAt = clock.serverNow() - (Date.now() - (Number(s.at) || Date.now()));
+  socket.emit('host:state', { videoId: s.videoId, title: s.title, channel: s.channel, position, isPlaying, sampledAt });
+}
+
+// host ได้ยินเพลงจาก YouTube Music อยู่แล้ว → ปิดเสียงตัวเล่นในเว็บ กันได้ยินสองชั้น
+function setHosting(on) {
+  if (isHosting === on) return;
+  isHosting = on;
+  if (on) player?.mute();
+  else player?.unmute();
+  renderHost();
+}
+
+function renderHost() {
+  ui.renderHost(room?.host ?? null, { isMe: isHosting, ytmLive: isYtmLive() });
+}
+
+async function requestHost({ force = false, silent = false } = {}) {
+  let res;
+  try {
+    res = await socket.timeout(5000).emitWithAck('host:start', { force });
+  } catch {
+    res = { error: 'เชื่อมต่อ server ไม่ได้ ลองใหม่อีกที' };
+  }
+  if (res?.confirm && !silent) {
+    const ok = await ui.askDialog({
+      title: 'แย่งเป็น host?',
+      body: `${res.host} กำลังเปิดเพลงให้ห้องฟังอยู่ ถ้าแย่ง ห้องจะเปลี่ยนมาเล่นตาม YouTube Music ของคุณทันที และ ${res.host} จะได้ข้อความแจ้ง`,
+      ok: 'แย่งเลย',
+      cancel: 'ไม่แย่ง',
+    });
+    return ok ? requestHost({ force: true }) : undefined;
+  }
+  if (!res?.ok) {
+    wantHost = false;
+    setHosting(false);
+    if (res?.confirm) return ui.toast(`${res.host} เป็น host แทนแล้วระหว่างที่หลุด`);
+    return ui.toast(res?.error ?? 'เป็น host ไม่สำเร็จ');
+  }
+  wantHost = true;
+  setHosting(true);
+  if (!silent && !(await hostLink.poll())) ui.toast('เปิด music.youtube.com แล้วเล่นเพลงได้เลย ห้องจะเล่นตาม');
+}
+
+async function showInstallGuide() {
+  const download = await ui.askDialog({
+    title: 'ต้องติดตั้ง extension ก่อน',
+    body: [
+      'กดปุ่มด้านล่างเพื่อดาวน์โหลด แล้วแตกไฟล์ zip ไว้ในโฟลเดอร์ที่จะไม่ลบทิ้ง',
+      'เปิด chrome://extensions แล้วเปิด "Developer mode" ที่มุมขวาบน',
+      'กด "Load unpacked" แล้วเลือกโฟลเดอร์ที่แตกไว้',
+      'รีเฟรชหน้านี้ เปิด music.youtube.com แล้วกด "ฟังตามผม" อีกครั้ง',
+    ],
+    ok: 'ดาวน์โหลด extension',
+    cancel: 'ไว้ก่อน',
+  });
+  if (download) location.href = '/extension.zip';
+}
+
+async function onHostClick() {
+  if (!joined) return;
+  if (isHosting) {
+    wantHost = false;
+    socket.emit('host:stop');
+    setHosting(false);
+    return;
+  }
+  if (!(await hostLink.detect())) return showInstallGuide();
+  requestHost();
+}
 
 // ---------- แชท ----------
 function onChat(msg) {
@@ -280,6 +391,7 @@ function reportBlocked() {
 async function initPlayer() {
   player = await createPlayer('player', { onEnded: reportEnd, onBlocked: reportBlocked });
   syncer = createSyncer(player);
+  if (isHosting) player.mute(); // กดเป็น host ก่อนตัวเล่นโหลดเสร็จ
   // เปิด ?debug=1 แล้วพิมพ์ __lt.drift() ใน console เพื่อดูว่าเครื่องนี้คลาดจากห้องกี่วินาที
   if (new URLSearchParams(location.search).has('debug')) {
     window.__lt = {
@@ -291,6 +403,9 @@ async function initPlayer() {
 
 function updateSyncBadge(now) {
   if (!socket.connected) return ui.renderSync('off', 'หลุดการเชื่อมต่อ…');
+  if (isHosting) {
+    return isYtmLive() ? ui.renderSync('live', 'คุณเป็น host') : ui.renderSync('catching', 'รอ YouTube Music…');
+  }
   if (!currentItem(room)) return ui.renderSync('idle', 'รอเพลงแรก');
   if (!room.isPlaying) return ui.renderSync('idle', 'พักเพลงอยู่');
   const drift = player.currentTime() - expectedPosition(room, now);
@@ -309,7 +424,14 @@ function tick() {
   if (room.isPlaying && duration > 0 && expectedPosition(room, now) > duration + 1) reportEnd();
   ui.renderProgress(room, duration, now, isDragging);
   updateSyncBadge(now);
+  // แท็บ YouTube Music เงียบไป (ปิดแท็บ) / กลับมาส่ง → เปลี่ยนข้อความบนป้าย host
+  const live = isYtmLive();
+  if (isHosting && live !== shownYtmLive) {
+    shownYtmLive = live;
+    renderHost();
+  }
 }
+let shownYtmLive = false;
 
 // ---------- ค้นเพลง ----------
 const looksLikeLink = (text) => /youtu\.?be|youtube\.com|^[A-Za-z0-9_-]{11}$/.test(text);
@@ -494,6 +616,7 @@ async function main() {
   });
   bindRoomLink();
   bindGame();
+  $('host-toggle').addEventListener('click', onHostClick);
   initLounge();
   getJson('/api/config')
     .then((cfg) => {

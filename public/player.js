@@ -48,6 +48,7 @@ export async function createPlayer(elementId, { onEnded, onBlocked }) {
     pause: () => yt.pauseVideo(),
     seek: (seconds) => yt.seekTo(Math.max(0, seconds), true),
     unmute: () => yt.unMute(),
+    mute: () => yt.mute(),
     state: () => yt.getPlayerState(),
     currentTime: () => yt.getCurrentTime() ?? 0,
     duration: () => yt.getDuration() ?? 0,

@@ -11,6 +11,12 @@ const PREV_RESTART_THRESHOLD_SEC = 3;
 // เมื่อคิวหมดให้ทำอะไร: หยุด / วนกลับเพลงแรก / ต่อเพลงแนวเดียวกัน (server ค้นมาเติมให้)
 export const WHEN_EMPTY_MODES = Object.freeze(['stop', 'loop', 'similar']);
 
+// โหมด "ฟังตาม host": เพลง/ตำแหน่งมาจาก YouTube Music ในเครื่อง host คนเดียว
+// คำสั่งที่ทำให้ห้องเล่นต่างจาก host ต้องถูกเมินทั้งหมด ไม่งั้นห้องกับเครื่อง host จะเพี้ยนกัน
+const HOST_LOCKED = new Set(['add', 'addMany', 'autofill', 'play', 'pause', 'seek', 'next', 'prev', 'jump', 'remove', 'move', 'mode', 'ended']);
+// host ส่งสถานะมาทุกวิ — broadcast ใหม่เฉพาะตอนคลาดจากที่ห้องคำนวณไว้เกินนี้ (กันส่งคิวทั้งก้อนให้ทุกคนทุกวินาที)
+const HOST_RESYNC_SEC = 1;
+
 export function createRoomState(now) {
   return {
     queue: [],
@@ -20,6 +26,7 @@ export function createRoomState(now) {
     refTime: now,
     finished: false,
     whenEmpty: 'similar',
+    host: null, // { socketId, name } ตอนมีคนเป็น host
     version: 0,
   };
 }
@@ -58,7 +65,7 @@ function goNext(state, now) {
 
 // เพลงที่กำลังเล่นเป็นเพลงสุดท้ายที่เล่นได้แล้ว และห้องตั้งให้ต่อเพลงแนวเดียวกัน → ถึงเวลาเติม
 export function needsAutofill(state) {
-  if (state.whenEmpty !== 'similar' || state.currentId === null) return false;
+  if (state.host || state.whenEmpty !== 'similar' || state.currentId === null) return false;
   return findPlayable(state.queue, indexOfCurrent(state) + 1, 1) === null;
 }
 
@@ -100,10 +107,52 @@ function removeItem(state, id, now) {
 }
 
 // รับเฉพาะเพลงที่กำลังเล่น (ตัวเล่นเพิ่ง error จริง) — กัน client ป้าย blocked ใส่เพลงไหนก็ได้
+// โหมด host: แค่ติดป้าย ไม่ข้ามเพลง เพราะคนเลือกเพลงถัดไปคือ host (ข้ามเองจะหลุดจากเครื่อง host)
 function markBlocked(state, id, now) {
   if (id !== state.currentId) return state;
+  if (state.queue.find((item) => item.id === id)?.blocked) return state;
   const queue = state.queue.map((item) => (item.id === id ? { ...item, blocked: true } : item));
-  return goNext({ ...state, queue }, now);
+  return state.host ? { ...state, queue } : goNext({ ...state, queue }, now);
+}
+
+function findLastByVideo(queue, videoId) {
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    if (queue[i].videoId === videoId) return queue[i];
+  }
+  return null;
+}
+
+// สถานะจากเครื่อง host: เพลงใหม่ → ใช้รายการเดิมในคิวถ้าเคยเปิดแล้ว ไม่งั้นต่อท้าย (คิวกลายเป็นประวัติเพลงที่ host เปิด)
+// เพลงเดิม → อัปเดตเฉพาะตอนเล่น/หยุดเปลี่ยน หรือตำแหน่งคลาดเกิน HOST_RESYNC_SEC
+function hostSync(state, action) {
+  const { videoId, position, isPlaying, refTime, item } = action;
+  const current = state.queue.find((q) => q.id === state.currentId);
+  let next = state;
+  if (current?.videoId !== videoId) {
+    const existing = findLastByVideo(state.queue, videoId);
+    if (existing) {
+      next = { ...state, currentId: existing.id };
+    } else {
+      // คิวเต็ม → ทิ้งเพลงเก่าสุด (เป็นแค่ประวัติ) แทนการไม่รับเพลงที่ host กำลังเปิด
+      const base = state.queue.length >= MAX_QUEUE ? state.queue.slice(1) : state.queue;
+      next = { ...state, queue: [...base, item], currentId: item.id };
+    }
+  } else {
+    const drift = Math.abs(positionAt(state, refTime) - position);
+    if (state.isPlaying === isPlaying && drift <= HOST_RESYNC_SEC) return state;
+  }
+  return { ...next, isPlaying, position, refTime, finished: false };
+}
+
+function hostStart(state, host) {
+  if (state.host?.socketId === host.socketId) return state;
+  return { ...state, host: { socketId: host.socketId, name: host.name } };
+}
+
+// socketId ระบุมา = หยุดเฉพาะถ้ายังเป็น host คนนั้นอยู่ (กัน timer ของ host เก่าไปหยุด host คนใหม่)
+function hostStop(state, socketId) {
+  if (!state.host || (socketId && state.host.socketId !== socketId)) return state;
+  return { ...state, host: null };
 }
 
 // ย้ายเพลงไปลำดับ to (นับจาก 0 ในคิวหลังย้าย) — ไม่แตะเพลงที่กำลังเล่น/ตำแหน่งเพลง
@@ -124,6 +173,7 @@ function jumpTo(state, id, now) {
 
 // คืน state ใหม่ ถ้า action ไม่มีผลจะคืน object เดิม (ใช้ === เช็คว่าต้อง broadcast ไหม)
 function applyAction(state, action, now) {
+  if (state.host && HOST_LOCKED.has(action.type)) return state;
   switch (action.type) {
     case 'add':
       return addItem(state, action.item, now);
@@ -158,6 +208,13 @@ function applyAction(state, action, now) {
     case 'autofill':
     case 'addMany':
       return appendItems(state, action.items, now);
+    // 3 ตัวนี้มาจาก server เท่านั้น (ผ่าน socket event host:* ที่ตรวจสิทธิ์แล้ว)
+    case 'hostStart':
+      return hostStart(state, action.host);
+    case 'hostStop':
+      return hostStop(state, action.socketId);
+    case 'hostSync':
+      return state.host ? hostSync(state, action) : state;
     default:
       return state;
   }

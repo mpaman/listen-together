@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "ฟังเพลงกับ chok — host",
+  "version": "0.1.0",
+  "description": "ส่งเพลงที่เล่นอยู่ใน YouTube Music ของเครื่องนี้ ให้ห้องในเว็บฟังเพลงกับ chok เล่นตาม (กด \"ฟังตามผม\" ในเว็บ)",
+  "icons": { "32": "icon-32.png", "128": "icon-128.png" },
+  "background": { "service_worker": "background.js" },
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://listen-with-chok.onrender.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["ytm-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["ytm-relay.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://listen-with-chok.onrender.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

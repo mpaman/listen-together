@@ -35,6 +35,7 @@
     <symbol id="i-grip" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="9" cy="6.5" r="1.6"/><circle cx="15" cy="6.5" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="17.5" r="1.6"/><circle cx="15" cy="17.5" r="1.6"/></g></symbol>
     <symbol id="i-game" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7.5h10a4.5 4.5 0 0 1 4.4 5.5l-.9 4a2.6 2.6 0 0 1-4.6 1.1L14.5 16h-5l-1.4 2.1a2.6 2.6 0 0 1-4.6-1.1l-.9-4A4.5 4.5 0 0 1 7 7.5z"/><path d="M8 11v3M6.5 12.5h3"/></g><g fill="currentColor"><circle cx="15.5" cy="11.5" r="1"/><circle cx="17.5" cy="13.5" r="1"/></g></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 11 12 4.5 20 11v8a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3.5" y="14" width="4.5" height="6.5" rx="1.2"/><rect x="16" y="14" width="4.5" height="6.5" rx="1.2"/></g></symbol>
     <symbol id="i-dice" viewBox="0 0 24 24"><g fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="15" cy="9" r="1.5"/><circle cx="9" cy="15" r="1.5"/></g></symbol>
     <!-- ท่าทางในห้อง 3D: เส้น 2px ปลายมน ชุดเดียวกับไอคอนด้านบน -->
     <symbol id="i-jump" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V6"/><path d="m7 10.5 5-5 5 5"/><path d="M6 20.5h12"/></g></symbol>
@@ -60,6 +61,11 @@
       <button class="room-btn game-btn" id="game-open" type="button" aria-haspopup="dialog" aria-controls="game">
         <svg class="icon" aria-hidden="true"><use href="#i-game"/></svg>
         <span>เล่นเกม</span>
+      </button>
+      <!-- ฟังตามผม: เครื่องที่กดเป็น host ห้องเล่นตาม YouTube Music ของเครื่องนั้น (ต้องมี extension) -->
+      <button class="room-btn host-btn" id="host-toggle" type="button" aria-pressed="false">
+        <svg class="icon" aria-hidden="true"><use href="#i-headphones"/></svg>
+        <span id="host-toggle-label">ฟังตามผม</span>
       </button>
       <a class="room-btn home-btn" href="/">
         <svg class="icon" aria-hidden="true"><use href="#i-home"/></svg>
@@ -99,6 +105,10 @@
       </div>
 
       <div class="now">
+        <p class="host-banner" id="host-banner" role="status" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-headphones"/></svg>
+          <span id="host-banner-text"></span>
+        </p>
         <p class="eyebrow" id="now-eyebrow">ยังไม่มีเพลง</p>
         <h1 id="now-title" class="now-title">ห้องยังเงียบอยู่</h1>
         <p id="now-sub" class="now-sub">ค้นเพลงแล้วกด + เพื่อเริ่ม</p>
@@ -245,6 +255,18 @@
   </main>
 
   <ol class="toasts" id="toasts" aria-live="polite"></ol>
+
+  <!-- กล่องถามเรื่อง host: ใช้ทั้ง "จะแย่ง host ไหม" และ "ต้องติดตั้ง extension ก่อน" (ui.askDialog เติมเนื้อหาให้) -->
+  <dialog class="host-dialog" id="host-dialog" aria-labelledby="host-dialog-title">
+    <form method="dialog" class="host-dialog-card">
+      <h2 id="host-dialog-title"></h2>
+      <div class="host-dialog-body" id="host-dialog-body"></div>
+      <div class="host-dialog-actions">
+        <button value="cancel" class="btn-ghost" id="host-dialog-cancel">ยกเลิก</button>
+        <button value="ok" class="btn-primary" id="host-dialog-ok">ตกลง</button>
+      </div>
+    </form>
+  </dialog>
 
   <div class="gate" id="gate">
     <form class="gate-card" id="gate-form">

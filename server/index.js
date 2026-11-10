@@ -7,7 +7,9 @@ import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, spawnPose }
 import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
-import { cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
+import { cooldownLeftSec, decideHostStart, HOST_GRACE_MS } from './host.js';
+import { cleanHostState, cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
+import { zipFolder } from './zip.js';
 import { fetchPlaylist, isAutoMix, parsePlaylistId, resolveLink, search, suggest } from './youtube.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -37,6 +39,19 @@ function socketIp(socket) {
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 // Three.js (ห้อง 3D) เสิร์ฟจาก node_modules เอง — ไม่พึ่ง CDN ภายนอก
 app.use('/vendor/three', express.static(fileURLToPath(new URL('../node_modules/three/build', import.meta.url)), { maxAge: '7d' }));
+
+// แจก extension "host" ให้คนที่อยากกด "ฟังตามผม" (zip สร้างครั้งแรกที่มีคนขอ แล้วเก็บไว้ในหน่วยความจำ)
+let extensionZip = null;
+app.get('/extension.zip', (_req, res) => {
+  try {
+    extensionZip ??= zipFolder(fileURLToPath(new URL('../extension', import.meta.url)), 'listen-with-chok-host');
+  } catch (err) {
+    console.error('[extension.zip]', err.message);
+    return res.status(500).send('สร้างไฟล์ไม่สำเร็จ');
+  }
+  res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="listen-with-chok-host.zip"' });
+  return res.send(extensionZip);
+});
 
 // จำกัด /api/* ต่อ IP (กันยิงค้นจนโควต้า YouTube ทั้งวันหมด)
 const httpHits = new Map(); // ip → { windowStart, count }
@@ -140,6 +155,8 @@ function describeEvent(action, actor, seq, state) {
   if (action.type === 'autofill' || action.type === 'addMany') event.count = action.items.length;
   if (action.type === 'mode') event.mode = action.mode;
   if (action.type === 'move') event.title = state.queue.find((item) => item.id === action.id)?.title;
+  if (action.type === 'hostStart' && action.prev) event.prev = action.prev;
+  if (action.type === 'hostStop') event.reason = action.reason;
   return event;
 }
 
@@ -191,6 +208,23 @@ async function maybeAutofill(roomId, room) {
   } catch (err) {
     console.error('[autofill]', err.message);
   }
+}
+
+// ---------- โหมด host ("ฟังตามผม") ----------
+// ข้อมูลประกอบที่ไม่ต้องอยู่ใน state ที่ส่งให้ทุกคน: hostSince (ได้เป็น host เมื่อไร), hostActiveAt (เล่นเพลงล่าสุดเมื่อไร)
+function startHost(roomId, room, socketId, name, prevName) {
+  const now = Date.now();
+  clearTimeout(room.hostTimer);
+  room.hostSince = now;
+  room.hostActiveAt = now; // host ใหม่ได้เวลาตั้งตัว (ไปเปิด YouTube Music) ก่อนจะถูกแย่งโดยไม่ถาม
+  dispatch(roomId, room, { type: 'hostStart', host: { socketId, name }, prev: prevName }, { name, socketId });
+}
+
+function stopHost(roomId, room, reason) {
+  const host = room.state.host;
+  if (!host) return;
+  clearTimeout(room.hostTimer);
+  dispatch(roomId, room, { type: 'hostStop', socketId: host.socketId, reason }, { name: host.name, socketId: host.socketId });
 }
 
 function getOrCreateRoom(roomId) {
@@ -267,6 +301,48 @@ io.on('connection', (socket) => {
     if (action) dispatch(roomId, room, action, { name: userName, socketId: socket.id });
   });
 
+  // กด "ฟังตามผม": ตอบ { ok } / { confirm, host } (host เดิมกำลังเปิดเพลง ต้องถามก่อน) / { error }
+  socket.on('host:start', (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const room = roomId && rooms.get(roomId);
+    if (!room) return reply({ error: 'ยังไม่ได้เข้าห้อง' });
+    if (!allow()) return reply({ error: 'กดถี่ไป รอแป๊บนึง' });
+    const host = room.state.host;
+    const now = Date.now();
+    const decision = decideHostStart({
+      host,
+      socketId: socket.id,
+      hostConnected: Boolean(host && room.users.has(host.socketId)),
+      since: room.hostSince ?? 0,
+      activeAt: room.hostActiveAt ?? 0,
+      now,
+      force: payload?.force === true,
+    });
+    if (decision === 'same') return reply({ ok: true });
+    if (decision === 'confirm') return reply({ confirm: true, host: host.name });
+    if (decision === 'cooldown') return reply({ error: `${host.name} เพิ่งเป็น host รออีก ${cooldownLeftSec(room.hostSince, now)} วิ` });
+    // ถูกแย่ง → บอก host เดิมให้หยุดส่งเพลงและเปิดเสียงเว็บกลับ
+    if (host) io.to(host.socketId).emit('host:kicked', { by: userName });
+    startHost(roomId, room, socket.id, userName, host?.name);
+    return reply({ ok: true });
+  });
+
+  socket.on('host:stop', () => {
+    const room = roomId && rooms.get(roomId);
+    if (room?.state.host?.socketId === socket.id) stopHost(roomId, room, 'stop');
+  });
+
+  // สถานะจาก YouTube Music ของ host (extension → หน้าเว็บ host → ที่นี่) · รับเฉพาะจาก host ตัวจริง
+  socket.on('host:state', (raw) => {
+    const room = roomId && rooms.get(roomId);
+    if (!room || room.state.host?.socketId !== socket.id || !allow()) return;
+    const now = Date.now();
+    const clean = cleanHostState(raw, now);
+    if (!clean) return;
+    if (clean.isPlaying) room.hostActiveAt = now;
+    dispatch(roomId, room, { type: 'hostSync', ...clean, item: makeQueueItem(clean, userName) }, { name: userName, socketId: socket.id });
+  });
+
   // แชท: ตอบ ack ว่าส่งได้ไหม (หน้าเว็บจะได้บอกว่า "ส่งถี่ไป" แทนการเงียบหาย)
   socket.on('chat', (raw, ack) => {
     const reply = typeof ack === 'function' ? ack : () => {};
@@ -328,6 +404,14 @@ io.on('connection', (socket) => {
     const leaving = room.users.get(socket.id);
     if (leaving && drop(room.items, leaving)) emitItems(roomId, room); // ออกไปแล้วของหล่นไว้ตรงนั้น
     room.users.delete(socket.id);
+    // host หลุด: รอต่อกลับ (หน้าเว็บกด host:start ให้เองตอน join ใหม่) ถ้าไม่กลับมา → คืนห้องให้ทุกคนคุม
+    if (room.state.host?.socketId === socket.id) {
+      const id = roomId;
+      clearTimeout(room.hostTimer);
+      room.hostTimer = setTimeout(() => {
+        if (rooms.get(id) === room && room.state.host?.socketId === socket.id) stopHost(id, room, 'left');
+      }, HOST_GRACE_MS);
+    }
     io.to(roomId).emit('users', userList(room));
     io.to(roomId).emit('avatar:leave', { id: socket.id });
     if (room.users.size === 0) {

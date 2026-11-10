@@ -320,6 +320,8 @@ function eventText(ev) {
     case 'autofill': return `ต่อเพลงแนวเดียวกันให้ ${ev.count} เพลง`;
     case 'addMany': return `${by} เพิ่ม ${ev.count} เพลงจาก playlist`;
     case 'blocked': return 'ข้ามเพลงที่เล่นในเว็บนี้ไม่ได้';
+    case 'hostStart': return ev.prev ? `${by} แย่ง host จาก ${ev.prev} — ตอนนี้ฟังตาม ${by}` : `ตอนนี้ฟังตาม ${by} (จาก YouTube Music)`;
+    case 'hostStop': return ev.reason === 'left' ? `${by} หลุดไป — ทุกคนกลับมาคุมเพลงได้แล้ว` : `${by} เลิกเป็น host — ทุกคนคุมเพลงได้แล้ว`;
     default: return null;
   }
 }
@@ -363,6 +365,44 @@ export function renderLobby(rooms, onPick) {
     li.append(btn);
     list.append(li);
   }
+}
+
+// ---------- โหมดฟังตาม host ----------
+// ระหว่างมี host ปุ่มคุมเพลงในเว็บใช้ไม่ได้ (รวมของ host เอง — host คุมจาก YouTube Music)
+// server ก็เมินคำสั่งพวกนี้อยู่แล้ว ปิดปุ่มไว้แค่ให้คนเห็นว่าทำไมกดไม่ได้
+const HOST_LOCKED_SELECTORS = '#btn-play, #btn-prev, #btn-next, #seek, #search-input, .search-go, #game-play, .segmented [data-mode]';
+
+export function renderHost(host, { isMe, ytmLive }) {
+  const following = Boolean(host);
+  document.body.classList.toggle('is-following', following);
+  for (const node of document.querySelectorAll(HOST_LOCKED_SELECTORS)) node.disabled = following;
+  $('host-banner').hidden = !following;
+  if (following) {
+    let text = `ฟังตาม ${host.name} (จาก YouTube Music) — ปุ่มเพลงในเว็บพักไว้ก่อน`;
+    if (isMe) text = ytmLive ? 'คุณเป็น host — เปิดเพลงใน YouTube Music ได้เลย ห้องเล่นตาม' : 'คุณเป็น host — เปิด music.youtube.com แล้วเล่นเพลงได้เลย';
+    $('host-banner-text').textContent = text;
+  }
+  $('host-banner').classList.toggle('is-me', Boolean(isMe));
+  $('host-toggle').setAttribute('aria-pressed', String(Boolean(isMe)));
+  $('host-toggle-label').textContent = isMe ? 'หยุดเป็น host' : 'ฟังตามผม';
+}
+
+// กล่องถาม (ใช้ <dialog> ของ browser — ได้ focus trap/ESC มาฟรี) · คืน true ถ้ากดปุ่มยืนยัน
+// body: ข้อความ (string) หรือรายการขั้นตอน (array → ใส่เป็นลำดับเลข)
+export function askDialog({ title, body, ok = 'ตกลง', cancel = 'ยกเลิก' }) {
+  const dialog = $('host-dialog');
+  $('host-dialog-title').textContent = title;
+  const content = Array.isArray(body) ? el('ol', 'host-steps') : el('p', '', body);
+  if (Array.isArray(body)) content.append(...body.map((step) => el('li', '', step)));
+  $('host-dialog-body').replaceChildren(content);
+  $('host-dialog-ok').textContent = ok;
+  $('host-dialog-cancel').textContent = cancel ?? '';
+  $('host-dialog-cancel').hidden = !cancel;
+  dialog.returnValue = '';
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+    dialog.showModal();
+  });
 }
 
 export function setHint(text, isError = false) {

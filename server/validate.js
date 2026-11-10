@@ -49,6 +49,28 @@ export function makeQueueItem({ videoId, title, channel }, addedBy, auto = false
   };
 }
 
+// สถานะจาก YouTube Music ในเครื่อง host — sampledAt = เวลา server (ฝั่งหน้าเว็บแปลงด้วย clock.js แล้ว) ตอนอ่านค่า
+// sampledAt ที่อยู่ในอนาคต/เก่าเกินไป (นาฬิกาเพี้ยน/ข้อความค้าง) → บีบให้อยู่ในกรอบ แล้วเลื่อน position ตามให้ยังตรง
+const MAX_SAMPLE_AGE_MS = 5000;
+
+export function cleanHostState(raw, now) {
+  if (!raw || typeof raw !== 'object' || !isVideoId(raw.videoId)) return null;
+  const position = Number(raw.position);
+  if (!Number.isFinite(position) || position < 0 || position > MAX_POSITION_SEC) return null;
+  const isPlaying = raw.isPlaying === true;
+  const sampledAt = Number(raw.sampledAt);
+  const refTime = Number.isFinite(sampledAt) ? Math.min(now, Math.max(now - MAX_SAMPLE_AGE_MS, sampledAt)) : now;
+  const shift = isPlaying && Number.isFinite(sampledAt) ? (refTime - sampledAt) / 1000 : 0;
+  return {
+    videoId: raw.videoId,
+    title: cleanText(raw.title, MAX_TITLE),
+    channel: cleanText(raw.channel, MAX_TITLE),
+    position: Math.max(0, position + shift),
+    isPlaying,
+    refTime,
+  };
+}
+
 // คืน action ที่สะอาดแล้ว หรือ null ถ้าไม่ผ่าน
 export function sanitizeAction(raw, addedBy) {
   if (!raw || typeof raw !== 'object') return null;
