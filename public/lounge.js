@@ -57,11 +57,11 @@ function buildScreen(scene) {
       ctx.fillRect(0, y, canvas.width, 1);
     }
     ctx.fillStyle = isPlaying ? '#feae34' : '#8b9bb4';
-    ctx.font = '600 16px "Chakra Petch", "Pixelify Sans", sans-serif';
+    ctx.font = '600 16px "Prompt", "IBM Plex Sans Thai", sans-serif';
     ctx.textBaseline = 'middle';
     ctx.fillText(isPlaying ? '▶ กำลังเล่น' : title ? '❚❚ พักเพลง' : 'ยังไม่มีเพลง', 16, 26);
     ctx.fillStyle = '#ffffff';
-    ctx.font = '600 26px "Chakra Petch", "Pixelify Sans", sans-serif';
+    ctx.font = '600 26px "Prompt", "IBM Plex Sans Thai", sans-serif';
     let text = title ?? 'ค้นเพลงแล้วกด + เพื่อเริ่ม';
     while (ctx.measureText(text).width > canvas.width - 32 && text.length > 1) text = `${text.slice(0, -2)}…`;
     ctx.fillText(text, 16, 62);
