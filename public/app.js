@@ -9,6 +9,9 @@ import { createQueueDrag } from './queue-drag.js';
 import { createNotifier } from './notify.js';
 import { randomLook } from './lounge-avatar.js';
 import { createHostLink } from './host-link.js';
+import { createLyrics } from './lyrics.js';
+import { createStageView } from './stage-view.js';
+import { createMediaSession, registerServiceWorker } from './pwa.js';
 import * as ui from './ui.js';
 
 const TICK_MS = 400;
@@ -41,6 +44,10 @@ const CHAT_TOAST_LEN = 60;
 const notifier = createNotifier();
 let lounge = null; // ห้อง 3D (null = เครื่องนี้เปิด WebGL ไม่ได้ → ใช้แบบไม่มีห้อง 3D)
 let myLook = loadLook();
+let lyrics = null;
+let stageView = null;
+let wakeLock = null;
+let mediaSession = null;
 
 function loadLook() {
   try {
@@ -108,6 +115,7 @@ function applyState(next, force = false) {
   renderHost();
   renderQueue();
   ui.renderNowPlaying(room);
+  renderStage();
   ui.renderMode(room.whenEmpty);
   lounge?.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
   $('game-song').textContent = currentItem(room)?.title ?? 'ยังไม่มีเพลง';
@@ -189,6 +197,37 @@ function setHosting(on) {
 
 function renderHost() {
   ui.renderHost(room?.host ?? null, { isMe: isHosting, ytmLive: isYtmLive() });
+  lyrics?.refreshSeekable(); // มี host = ห้ามกดบรรทัดเนื้อเพลงเพื่อเลื่อนเพลง (เหมือนปุ่มคุมเพลงอื่น)
+}
+
+// ปก/เนื้อเพลง/แถบแจ้งเตือนของมือถือ ตามเพลงที่เล่นอยู่
+function renderStage() {
+  const item = currentItem(room);
+  stageView?.setItem(item);
+  lyrics?.setSong(item);
+  mediaSession?.update(item, room.isPlaying);
+}
+
+// ---------- จอ (MV / ฟังอย่างเดียว / เนื้อเพลง) + เปิดค้างแบบแอป ----------
+function initStage() {
+  lyrics = createLyrics({
+    getTime: () => player?.currentTime() ?? 0,
+    getDuration: () => player?.duration() ?? 0,
+    onSeek: (position) => send({ type: 'seek', position }),
+    canSeek: () => joined && !room?.host,
+  });
+  stageView = createStageView({ onChange: (view) => lyrics.setVisible(view === 'lyrics') });
+  mediaSession = createMediaSession({
+    // ปุ่มบนหน้าจอล็อกส่งคำสั่งเข้าห้อง เหมือนกดปุ่มในเว็บ (ทุกคนในห้องเห็นตาม)
+    onAction: ({ type }) => {
+      if (room?.host) return;
+      if (type === 'play' || type === 'pause') send({ type: room?.isPlaying ? 'pause' : 'play' });
+      else send({ type });
+    },
+  });
+  // ปุ่ม "จอไม่ดับ" ปิดไว้ก่อน (ดูคอมเมนต์ใน index.html) — wakeLock เป็น null แล้ว wakeLock?.resume() เลยไม่ทำอะไร
+  // wakeLock = createWakeLock($('wake-toggle'), { onNotice: (text) => ui.toast(text) });
+  registerServiceWorker();
 }
 
 async function requestHost({ force = false, silent = false } = {}) {
@@ -528,6 +567,7 @@ function enterGate(pickedId = null) {
     // ไม่เป็นไร
   }
   player?.unmute();
+  wakeLock?.resume(); // ขอกันจอดับได้เฉพาะจังหวะที่ผู้ใช้เพิ่งกด
   notifier.unlock(); // จังหวะนี้มีการกดของผู้ใช้ → browser ยอมให้เสียงเตือนแชทดังได้
   $('gate').classList.add('is-leaving');
   setTimeout(() => ($('gate').hidden = true), 200);
@@ -616,6 +656,7 @@ async function main() {
   });
   bindRoomLink();
   bindGame();
+  initStage();
   $('host-toggle').addEventListener('click', onHostClick);
   initLounge();
   getJson('/api/config')

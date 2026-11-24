@@ -1,0 +1,16 @@
+{
+  "name": "ฟังเพลงกับ chok",
+  "short_name": "ฟังเพลงกับ chok",
+  "description": "ฟังเพลง YouTube พร้อมกันกับเพื่อนแบบ realtime",
+  "lang": "th",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f0f23",
+  "theme_color": "#0f0f23",
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

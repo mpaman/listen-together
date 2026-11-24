@@ -10,7 +10,8 @@ import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cooldownLeftSec, decideHostStart, HOST_GRACE_MS } from './host.js';
 import { cleanHostState, cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
 import { zipFolder } from './zip.js';
-import { fetchPlaylist, isAutoMix, parsePlaylistId, resolveLink, search, suggest } from './youtube.js';
+import { fetchPlaylist, isAutoMix, isVideoId, parsePlaylistId, resolveLink, search, suggest } from './youtube.js';
+import { findLyrics } from './lyrics.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.YOUTUBE_API_KEY ?? '';
@@ -105,6 +106,23 @@ app.get('/api/playlist', async (req, res) => {
     console.error('[playlist]', err.message);
     const notFound = err.status === 404 || err.status === 403;
     return res.status(notFound ? 404 : 502).json({ error: notFound ? 'หา playlist ไม่เจอ หรือเป็นแบบส่วนตัว' : 'ดึง playlist ไม่สำเร็จ' });
+  }
+});
+
+// เนื้อเพลงของเพลงที่เล่นอยู่ (หน้าเว็บส่งชื่อ/ช่อง/ความยาวมา) — ไม่เจอ = 404 ให้หน้าเว็บโชว์ "ไม่มีเนื้อเพลง"
+const MAX_SONG_SEC = 3 * 60 * 60;
+app.get('/api/lyrics', async (req, res) => {
+  const videoId = String(req.query.v ?? '');
+  const title = String(req.query.title ?? '').slice(0, 200);
+  const channel = String(req.query.channel ?? '').slice(0, 100);
+  const duration = Math.min(Math.max(Number(req.query.d) || 0, 0), MAX_SONG_SEC);
+  if (!isVideoId(videoId) || !title.trim()) return res.status(400).json({ error: 'ข้อมูลเพลงไม่ครบ' });
+  try {
+    const lyrics = await findLyrics({ videoId, title, channel, duration });
+    return lyrics ? res.json(lyrics) : res.status(404).json({ error: 'ไม่พบเนื้อเพลงนี้' });
+  } catch (err) {
+    console.error('[lyrics]', err.message);
+    return res.status(502).json({ error: 'ดึงเนื้อเพลงไม่สำเร็จ ลองใหม่อีกที' });
   }
 });
 
