@@ -15,3 +15,6 @@ services:
       # sync: false = Render จะถามค่าตอนสร้าง (ใส่ key เองในหน้าเว็บ Render, ไม่เก็บใน repo)
       - key: YOUTUBE_API_KEY
         sync: false
+      # ไม่บังคับ: key ฟรีจาก https://www.last.fm/api/account/create → ต่อเพลงด้วย "เพลงคล้าย" (ได้ศิลปินใหม่ที่เข้ากัน)
+      - key: LASTFM_API_KEY
+        sync: false

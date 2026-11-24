@@ -10,11 +10,16 @@ import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cooldownLeftSec, decideHostStart, HOST_GRACE_MS } from './host.js';
 import { cleanHostState, cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
 import { zipFolder } from './zip.js';
-import { fetchPlaylist, isAutoMix, isVideoId, parsePlaylistId, resolveLink, search, suggest } from './youtube.js';
+import { fetchPlaylist, isAutoMix, isVideoId, keepSongLength, parsePlaylistId, resolveLink, search, suggestCandidates } from './youtube.js';
+import { outcomeOf, recordOutcome } from './taste.js';
+import { findSimilar } from './lastfm.js';
+import { estimateUnits, pickAutofill } from './autofill.js';
 import { findLyrics } from './lyrics.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.YOUTUBE_API_KEY ?? '';
+// ไม่บังคับ: มี key = ต่อเพลงด้วยเพลงคล้ายจาก Last.fm (ขั้น 2) · ไม่มี = ค้นจากชื่อศิลปินอย่างเดียว (ขั้น 1)
+const LASTFM_KEY = process.env.LASTFM_API_KEY ?? '';
 const MAX_ROOMS = 100;
 const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
 const MAX_QUERY_LEN = 100;
@@ -180,28 +185,39 @@ function describeEvent(action, actor, seq, state) {
 
 // จุดเดียวที่เปลี่ยนสถานะห้อง: reduce → จำ event → กระจายให้ทุกคน → เช็คว่าต้องเติมเพลงไหม
 function dispatch(roomId, room, action, actor) {
-  const next = reduce(room.state, action, Date.now());
+  const now = Date.now();
+  const next = reduce(room.state, action, now);
   if (next === room.state) return;
+  // จำว่าเพลงที่เพิ่งจบรอบ ห้องฟังจบหรือข้าม (ใช้ตอนเลือกเพลงต่อให้ · ไม่ส่งให้หน้าเว็บ)
+  const outcome = outcomeOf(room.state, next, action, now);
+  if (outcome) room.history = recordOutcome(room.history ?? [], outcome.item, outcome.playedSec, outcome.ended);
   room.state = next;
   room.event = describeEvent(action, actor, next.version, next);
   io.to(roomId).emit('state', snapshot(room));
   maybeAutofill(roomId, room);
 }
 
-// งบการเติมเพลง: ค้น 1 ครั้ง = 101 หน่วยจากโควต้าวันละ 10,000
+// งบการเติมเพลง นับเป็น "หน่วยโควตา YouTube" (วันละ 10,000): ขั้น 1 = 101 ต่อรอบ · ขั้น 2 = ~302 (ค้นคลิปทีละเพลง)
 // ทุกครั้งที่มีคนเพิ่มเพลงในห้องว่างจะเรียกการเติมเพลง (ผ่าน socket ไม่ติด limit ของ /api) จึงต้องคุมแยก
 const AUTOFILL_ROOM_COOLDOWN_MS = 30_000;
-const AUTOFILL_DAILY_MAX = 40; // ~40% ของโควต้า เหลือให้คนค้นเอง
+const AUTOFILL_COUNT = 3;
+const AUTOFILL_DAILY_UNITS = 4000; // ~40% ของโควต้า เหลือให้คนค้นเอง
 const DAY_MS = 24 * 60 * 60 * 1000;
-const autofillLog = []; // เวลาที่เติมเพลง (ทั้ง server) ย้อนหลัง 24 ชม.
+const autofillLog = []; // { at, units } ของการเติมเพลง (ทั้ง server) ย้อนหลัง 24 ชม.
 
+// จองงบตามที่คาดว่าจะใช้ก่อนเริ่ม (กันหลายห้องเติมพร้อมกันจนเกิน) แล้วค่อยแก้เป็นค่าจริงตอนจบ
+// งบเหลือไม่พอขั้น 2 แต่พอขั้น 1 → ลดเหลือขั้น 1 แทนการไม่เติมเลย
 function takeAutofillBudget(room, now) {
-  while (autofillLog.length && now - autofillLog[0] > DAY_MS) autofillLog.shift();
-  if (autofillLog.length >= AUTOFILL_DAILY_MAX) return false;
-  if (now - (room.lastFillAt ?? 0) < AUTOFILL_ROOM_COOLDOWN_MS) return false;
-  autofillLog.push(now);
+  while (autofillLog.length && now - autofillLog[0].at > DAY_MS) autofillLog.shift();
+  if (now - (room.lastFillAt ?? 0) < AUTOFILL_ROOM_COOLDOWN_MS) return null;
+  const used = autofillLog.reduce((sum, entry) => sum + entry.units, 0);
+  const useLastfm = Boolean(LASTFM_KEY) && used + estimateUnits(true) <= AUTOFILL_DAILY_UNITS;
+  const units = estimateUnits(useLastfm);
+  if (used + units > AUTOFILL_DAILY_UNITS) return null;
+  const entry = { at: now, units };
+  autofillLog.push(entry);
   room.lastFillAt = now;
-  return true;
+  return { entry, useLastfm };
 }
 
 // ระหว่างรอผลค้น ห้องอาจเปลี่ยนไปแล้ว (เปลี่ยนโหมด / เปลี่ยนเพลง / มีคนเพิ่มเพลงเอง) → เติมเฉพาะถ้ายังต้องเติมจริง
@@ -213,10 +229,26 @@ const stillNeedsFill = (room, seedId) =>
 async function maybeAutofill(roomId, room) {
   if (!API_KEY || !needsAutofill(room.state)) return;
   const seed = room.state.queue.find((item) => item.id === room.state.currentId);
-  if (!seed || room.fillingFor === seed.id || !takeAutofillBudget(room, Date.now())) return;
+  if (!seed || room.fillingFor === seed.id) return;
+  const budget = takeAutofillBudget(room, Date.now());
+  if (!budget) return;
   room.fillingFor = seed.id;
   try {
-    const picks = await suggest(seed, new Set(room.state.queue.map((item) => item.videoId)), API_KEY);
+    // เพลงตั้งต้นเลือกจากรสนิยมห้อง (taste.js) · มี Last.fm = เพิ่มศิลปินใหม่ที่คล้ายกัน (autofill.js)
+    const result = await pickAutofill(
+      { seed, history: room.history ?? [], queue: room.state.queue, lastSeedArtist: room.lastSeedArtist, count: AUTOFILL_COUNT },
+      {
+        useLastfm: budget.useLastfm,
+        search: (q) => search(q, API_KEY),
+        keepSongLength: (items) => keepSongLength(items, API_KEY),
+        suggestCandidates: (base, exclude) => suggestCandidates(base, exclude, API_KEY),
+        findSimilar: (item) => findSimilar(item, LASTFM_KEY),
+        onError: (err) => console.error('[autofill:lastfm]', err.message),
+      },
+    );
+    budget.entry.units = result.units;
+    room.lastSeedArtist = result.seedArtist;
+    const { picks } = result;
     if (rooms.get(roomId) !== room || !stillNeedsFill(room, seed.id)) return;
     const inQueue = new Set(room.state.queue.map((item) => item.videoId));
     const items = picks.filter((p) => !inQueue.has(p.videoId)).map((p) => makeQueueItem(p, AUTO_ADDED_BY, true));
@@ -442,4 +474,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`🎧 listen-together พร้อมที่ http://localhost:${PORT}`);
   if (!API_KEY) console.log('   (ยังไม่มี YOUTUBE_API_KEY — ค้นหาปิดอยู่ ใช้การวางลิงก์แทนได้)');
+  if (API_KEY) console.log(`   ต่อเพลงแนวเดียวกัน: ${LASTFM_KEY ? 'ใช้ Last.fm หาเพลงคล้าย' : 'ค้นจากชื่อศิลปิน (ไม่มี LASTFM_API_KEY)'}`);
 });

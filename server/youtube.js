@@ -142,8 +142,7 @@ function writeCache(key, results, now) {
 }
 
 // ---------- ต่อเพลงแนวเดียวกัน ----------
-// YouTube ปิด relatedToVideoId ไปแล้ว (2023) จึงเดาจากชื่อศิลปินของเพลงล่าสุดแทน
-const SUGGEST_COUNT = 3;
+// YouTube ปิด relatedToVideoId ไปแล้ว (2023) จึงค้นจากชื่อศิลปิน/เพลงตั้งต้นแทน (taste.js เลือกเพลงตั้งต้นจากรสนิยมห้อง)
 const SONG_MIN_SEC = 60;
 const SONG_MAX_SEC = 10 * 60; // ยาวกว่านี้มักเป็นคลิปรวมเพลง/LONGPLAY
 
@@ -178,37 +177,27 @@ export function seedQuery(item) {
   return cleanTitle(item.title) || channel;
 }
 
-// ชื่อเพลงหลัก (ส่วนแรกก่อน " - ") ไว้กันเลือกเพลงเดิมเวอร์ชันอื่น/คนอื่น cover
-const songCore = (title) => cleanTitle(title).split(/\s[-–|]\s/)[0].toLowerCase();
-
 async function durationsOf(videoIds, apiKey) {
   const params = new URLSearchParams({ part: 'contentDetails', id: videoIds.join(','), key: apiKey });
   const data = await fetchJson(`https://www.googleapis.com/youtube/v3/videos?${params}`);
   return new Map((data.items ?? []).map((v) => [v.id, parseIsoDuration(v.contentDetails?.duration)]));
 }
 
-function shuffle(list) {
-  const copy = [...list];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
+// ผลค้นจากเพลงตั้งต้น ที่ยังไม่อยู่ใน excludeVideoIds และยาวแบบเพลงปกติ (ไม่ใช่คลิปรวม/คลิปสั้น)
+// การกรองของปลอม/ให้คะแนน/เลือกเพลงอยู่ที่ taste.js — ไฟล์นี้แค่คุยกับ YouTube
+export async function suggestCandidates(seedItem, excludeVideoIds, apiKey) {
+  const fresh = (await search(seedQuery(seedItem), apiKey)).filter((r) => !excludeVideoIds.has(r.videoId));
+  return keepSongLength(fresh, apiKey);
 }
 
-// คืนเพลงที่ยังไม่เคยอยู่ในคิว ความยาวแบบเพลงปกติ สุ่มลำดับ
-export async function suggest(seedItem, excludeVideoIds, apiKey) {
-  const seedCore = songCore(seedItem.title);
-  const fresh = (await search(seedQuery(seedItem), apiKey)).filter(
-    (r) => !excludeVideoIds.has(r.videoId) && !(seedCore.length >= 2 && songCore(r.title) === seedCore),
-  );
-  if (fresh.length === 0) return [];
-  const durations = await durationsOf(fresh.map((r) => r.videoId), apiKey);
-  const songs = fresh.filter((r) => {
+// เหลือเฉพาะคลิปที่ยาวแบบเพลงปกติ (ถามความยาวทีเดียวทั้งชุด = 1 หน่วยโควตา)
+export async function keepSongLength(items, apiKey) {
+  if (items.length === 0) return [];
+  const durations = await durationsOf(items.map((r) => r.videoId), apiKey);
+  return items.filter((r) => {
     const sec = durations.get(r.videoId) ?? 0;
     return sec >= SONG_MIN_SEC && sec <= SONG_MAX_SEC;
   });
-  return shuffle(songs).slice(0, SUGGEST_COUNT);
 }
 
 export async function search(query, apiKey) {
