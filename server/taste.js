@@ -34,6 +34,15 @@ const partsOf = (title) =>
     .map((part) => part.trim())
     .filter((part) => part.length >= 2);
 const lowerParts = (title) => partsOf(title).map((part) => part.toLowerCase());
+// ท่อนศิลปินอาจมีหลายคน: "PUN, THE TOYS" / "PUN x THE TOYS" / "A feat. B" → แยกเป็นรายชื่อ
+const NAMES_SPLIT_RE = /\s*(?:,|&|\+)\s*|\s+(?:x|×|feat\.?|ft\.?|with|vs\.?)\s+/i;
+const namesIn = (part) =>
+  String(part)
+    .split(NAMES_SPLIT_RE)
+    .map((name) => name.trim())
+    .filter(Boolean);
+const lowerNames = (part) => namesIn(part).map((name) => name.toLowerCase());
+const isArtistPart = (part, artists) => lowerNames(part).some((name) => artists.has(name));
 
 // ตัวแทนศิลปิน = ชื่อช่อง (ตัด " - Topic" / VEVO / Official ออก) · เดาจากชื่อเพลงไม่ได้ เพราะไทยกับอังกฤษวางชื่อศิลปินคนละฝั่ง
 export function artistKey(item) {
@@ -47,29 +56,39 @@ export function artistKey(item) {
 // ---------- แยก "ชื่อศิลปิน" กับ "ชื่อเพลง" ในชื่อคลิป ----------
 // ชื่อคลิปมีทั้ง "ศิลปิน - เพลง" (ฝรั่ง) และ "เพลง - ศิลปิน" (ไทย) → เดาจากตำแหน่งไม่ได้ (bug 11-24: เคยถือท่อนแรกเป็นชื่อเพลงเสมอ
 // ฝรั่งเลยกันเพลงเดิมไม่อยู่ และกลับไปกันเพลงอื่นของศิลปินเดียวกันทิ้ง)
-// ท่อนที่ถือว่าเป็นศิลปิน: ตรงกับชื่อช่อง · ชื่อช่อง Topic · หรือโผล่คู่กับชื่อเพลงอื่นตั้งแต่ 2 เพลงขึ้นไป
+// ท่อนที่ถือว่าเป็นศิลปิน (เก็บเป็นรายชื่อทีละคน):
+//  1) มีชื่อช่องอยู่ในท่อน → ทุกชื่อในท่อนนั้น (ช่อง "PUN" + ท่อน "PUN, THE TOYS" → pun, the toys) · ช่อง Topic = ชื่อช่อง
+//  2) ท่อนที่โผล่คู่กับชื่อเพลงอื่นตั้งแต่ 2 เพลง · นับคู่โดยรวมท่อนที่รู้แล้วว่าเป็นศิลปินเป็นคู่เดียว
+//     (bug 11-24: "PUN, THE TOYS" กับ "PUN x THE TOYS" ถูกนับเป็น 2 คู่ → ชื่อเพลงถูกเดาว่าเป็นศิลปิน)
 export function learnArtists(items) {
   const artists = new Set();
-  const partners = new Map();
-  for (const item of items) {
-    const parts = lowerParts(item?.title);
+  const titles = items.map((item) => lowerParts(item?.title));
+  items.forEach((item, i) => {
     const channel = artistKey(item);
-    if (channel && (TOPIC_RE.test(item?.channel ?? '') || parts.includes(channel))) artists.add(channel);
+    if (!channel) return;
+    const hit = titles[i].find((part) => lowerNames(part).includes(channel));
+    if (hit) for (const name of lowerNames(hit)) artists.add(name);
+    else if (TOPIC_RE.test(item?.channel ?? '')) artists.add(channel);
+  });
+  const partnerId = (part) => (isArtistPart(part, artists) ? '@artist' : lowerNames(part).sort().join('|'));
+  const partners = new Map();
+  for (const parts of titles) {
     if (parts.length < 2) continue;
     for (const part of parts) {
-      const set = partners.get(part) ?? new Set();
-      for (const other of parts) if (other !== part) set.add(other);
-      partners.set(part, set);
+      const id = partnerId(part);
+      const set = partners.get(id) ?? new Set();
+      for (const other of parts) if (other !== part) set.add(partnerId(other));
+      partners.set(id, set);
     }
   }
-  for (const [part, set] of partners) if (set.size >= 2) artists.add(part);
+  for (const [id, set] of partners) if (id !== '@artist' && set.size >= 2) for (const name of id.split('|')) artists.add(name);
   return artists;
 }
 
 // ชื่อเพลงของคลิป (ตัดท่อนที่เป็นศิลปินออก) · ไม่รู้ว่าท่อนไหนเป็นศิลปิน → คืนทุกท่อน
 export function songKeys(title, artists = new Set()) {
   const parts = lowerParts(title);
-  const tracks = parts.filter((part) => !artists.has(part));
+  const tracks = parts.filter((part) => !isArtistPart(part, artists));
   return tracks.length ? tracks : parts;
 }
 export const songCore = (title, artists) => songKeys(title, artists)[0] ?? '';
@@ -79,9 +98,11 @@ const sharesKey = (keys, set) => keys.some((key) => set.has(key));
 export function searchQueryFor(item, artists) {
   const channel = String(item?.channel ?? '');
   if (TOPIC_RE.test(channel)) return channel.replace(TOPIC_RE, '').trim();
-  const known = new Set([...artists, artistKey(item)].filter(Boolean));
-  const artistPart = partsOf(item?.title).find((part) => known.has(part.toLowerCase()));
-  return artistPart ?? (cleanTitle(item?.title) || channel);
+  // ชอบชื่อช่องก่อน (ช่อง PUN ค้น "PUN" ไม่ใช่ "PUN, THE TOYS" ซึ่งได้แต่เพลงที่ร้องร่วมกัน)
+  const own = artistKey(item);
+  const names = partsOf(item?.title).flatMap(namesIn);
+  const artist = names.find((name) => name.toLowerCase() === own) ?? names.find((name) => artists.has(name.toLowerCase()));
+  return artist ?? (cleanTitle(item?.title) || channel);
 }
 
 export const isJunk = (title) => JUNK_EN_RE.test(title) || JUNK_TH_RE.test(title);

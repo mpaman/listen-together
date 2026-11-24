@@ -194,3 +194,19 @@ test('searchQueryFor: รู้ชื่อศิลปิน → ค้นด�
   assert.equal(searchQueryFor(yt('3', 'ปลายทาง - Bodyslam【Official MV】', 'GMM'), new Set(['bodyslam'])), 'Bodyslam');
   assert.equal(searchQueryFor(yt('4', 'ปลายทาง - Bodyslam【Official MV】', 'GMM'), new Set()), 'ปลายทาง - Bodyslam');
 });
+
+// bug 11-24 (2): ศิลปินหลายคนในท่อนเดียว "PUN, THE TOYS" แต่ช่องชื่อ "PUN" · แต่ละคลิปเขียนชื่อศิลปินต่างกัน (", " / " x ")
+test('rankCandidates: ศิลปินร่วม (PUN, THE TOYS / PUN x THE TOYS) → ไม่เอาเพลงเดิมคนละคลิป · ค้นด้วยชื่อช่อง', () => {
+  const seed = yt('s3', 'PUN, THE TOYS - เขียว เหลือง แดง (Get high)', 'PUN');
+  const cands = [
+    yt('a', 'เขียว เหลือง แดง (Get high) - PUN x THE TOYS [Official MV]', 'PUN'),
+    yt('b', 'PUN, THE TOYS - เขียว เหลือง แดง (Get high) [Lyric Video]', 'Fan'),
+    yt('c', 'เขียว เหลือง แดง (Get high)', 'PUN - Topic'),
+    yt('d', 'PUN - ถ้าเธอ (Official MV)', 'PUN'),
+    yt('e', 'THE TOYS - ก่อนฤดูฝน', 'THE TOYS'),
+  ];
+  const ctx = buildContext([], [seed], seed);
+  assert.equal(searchQueryFor(seed, ctx.artists), 'PUN');
+  const picked = rankCandidates(cands, ctx, 3, noRand);
+  assert.deepEqual(picked.map((p) => p.title).sort(), ['PUN - ถ้าเธอ (Official MV)', 'THE TOYS - ก่อนฤดูฝน']);
+});
