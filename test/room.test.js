@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomState, needsAutofill, positionAt, reduce } from '../server/room.js';
-import { cleanTitle, parseIsoDuration, parseVideoId, seedQuery } from '../server/youtube.js';
+import { cleanTitle, parseIsoDuration, parseVideoId } from '../server/youtube.js';
 import { isRoomId, normalizeRoomId, sanitizeAction } from '../server/validate.js';
 
 test('ชื่อห้อง: ภาษาไทยได้ ช่องว่างกลายเป็นขีด ตัดอักขระพิเศษ', () => {
@@ -77,10 +77,6 @@ test('cleanTitle ตัดวงเล็บและคำประกอบ', 
   assert.equal(cleanTitle('[MV] เขาที่เพิ่งเจอ - ABnormal'), 'เขาที่เพิ่งเจอ - ABnormal');
 });
 
-test('seedQuery: ช่อง Topic ใช้ชื่อศิลปิน / ช่องคนอัปโหลดใช้ชื่อเพลงที่ล้างแล้ว', () => {
-  assert.equal(seedQuery({ channel: 'bodyslam - Topic', title: 'แสงสุดท้าย' }), 'bodyslam');
-  assert.equal(seedQuery({ channel: 'อลิสา สุวรรณโชติ', title: 'ปลายทาง (ร้องสด) - Bodyslam' }), 'ปลายทาง - Bodyslam');
-});
 
 test('เพิ่มเพลงแรกในห้องว่าง → เล่นทันที', () => {
   const s = roomWith(['a']);

@@ -154,7 +154,6 @@ export function parseIsoDuration(iso) {
   return Number(h) * 3600 + Number(min) * 60 + Number(s);
 }
 
-const TOPIC_RE = /\s*-\s*Topic$/i;
 const BRACKETS_RE = /[(\[【「《][^)\]】」》]*[)\]】」》]/g;
 const NOISE_RE = /\b(official|music|video|mv|lyrics?|audio|live|4k|remaster(ed)?|hd)\b/gi;
 
@@ -168,25 +167,16 @@ export function cleanTitle(title) {
     .trim();
 }
 
-// ใช้อะไรค้นต่อ:
-//  - ช่อง "<ศิลปิน> - Topic" = ช่องศิลปินจริงของ YouTube Music → เชื่อชื่อช่อง
-//  - ช่องอื่น (คนอัปโหลด/ค่าย) ชื่อช่องมักไม่ใช่ศิลปิน → ใช้ชื่อเพลงที่ล้างแล้ว (มักมีชื่อศิลปินอยู่)
-export function seedQuery(item) {
-  const channel = String(item.channel ?? '');
-  if (TOPIC_RE.test(channel)) return channel.replace(TOPIC_RE, '').trim();
-  return cleanTitle(item.title) || channel;
-}
-
 async function durationsOf(videoIds, apiKey) {
   const params = new URLSearchParams({ part: 'contentDetails', id: videoIds.join(','), key: apiKey });
   const data = await fetchJson(`https://www.googleapis.com/youtube/v3/videos?${params}`);
   return new Map((data.items ?? []).map((v) => [v.id, parseIsoDuration(v.contentDetails?.duration)]));
 }
 
-// ผลค้นจากเพลงตั้งต้น ที่ยังไม่อยู่ใน excludeVideoIds และยาวแบบเพลงปกติ (ไม่ใช่คลิปรวม/คลิปสั้น)
-// การกรองของปลอม/ให้คะแนน/เลือกเพลงอยู่ที่ taste.js — ไฟล์นี้แค่คุยกับ YouTube
-export async function suggestCandidates(seedItem, excludeVideoIds, apiKey) {
-  const fresh = (await search(seedQuery(seedItem), apiKey)).filter((r) => !excludeVideoIds.has(r.videoId));
+// ผลค้นของ query ที่ยังไม่อยู่ใน excludeVideoIds และยาวแบบเพลงปกติ (ไม่ใช่คลิปรวม/คลิปสั้น)
+// คำค้น (taste.searchQueryFor) / การกรองของปลอม / ให้คะแนน / เลือกเพลง อยู่ที่ taste.js — ไฟล์นี้แค่คุยกับ YouTube
+export async function suggestCandidates(query, excludeVideoIds, apiKey) {
+  const fresh = (await search(query, apiKey)).filter((r) => !excludeVideoIds.has(r.videoId));
   return keepSongLength(fresh, apiKey);
 }
 

@@ -241,7 +241,7 @@ async function maybeAutofill(roomId, room) {
         useLastfm: budget.useLastfm,
         search: (q) => search(q, API_KEY),
         keepSongLength: (items) => keepSongLength(items, API_KEY),
-        suggestCandidates: (base, exclude) => suggestCandidates(base, exclude, API_KEY),
+        suggestCandidates: (query, exclude) => suggestCandidates(query, exclude, API_KEY),
         findSimilar: (item) => findSimilar(item, LASTFM_KEY),
         onError: (err) => console.error('[autofill:lastfm]', err.message),
       },

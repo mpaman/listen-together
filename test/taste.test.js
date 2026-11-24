@@ -11,6 +11,7 @@ import {
   rankCandidates,
   recordOutcome,
   scoreCandidate,
+  searchQueryFor,
   skippedArtists,
 } from '../server/taste.js';
 
@@ -74,7 +75,10 @@ test('pickSeed: มีแต่ศิลปินเดิมให้เลื�
   assert.equal(artistKey(pickSeed([played(1, 'C - Topic')], cur, 'c', noRand)), 'c');
 });
 
-const ctxOf = (over = {}) => ({ excludeVideoIds: new Set(), excludeCores: new Set(), disliked: new Set(), seedArtist: 'bodyslam', ...over });
+const ctxOf = (over = {}) => {
+  const ctx = { seen: [], excludeVideoIds: new Set(), excludeCores: new Set(), disliked: new Set(), seedArtist: 'bodyslam', ...over };
+  return { ...ctx, extraCores: [...ctx.excludeCores] };
+};
 
 test('scoreCandidate: ช่อง Topic + ศิลปินตั้งต้นได้คะแนนมากสุด · คลิปเนื้อเพลงคนอัป/รีมิกซ์โดนหัก · ศิลปินที่ไม่ชอบไม่เอาเลย', () => {
   const ctx = ctxOf({ disliked: new Set(['bad']) });
@@ -155,4 +159,38 @@ test('outcomeOf: ไม่บันทึก กดย้อน / pause / ลบ
   }
   const hosted = { ...s, host: { socketId: 'x', name: 'h' } };
   assert.equal(outcomeOf(hosted, { ...hosted, currentId: '2' }, { type: 'next' }, T0), null);
+});
+
+// ---------- เพลงเดียวกันคนละคลิป (bug 11-24: โหมดแนวเดียวกันได้เพลงเดิมซ้ำ) ----------
+const yt = (id, title, channel) => ({ videoId: vid(id), title, channel });
+
+test('rankCandidates: เพลงฝรั่ง "ศิลปิน - เพลง" → ไม่เอาเพลงเดิมคนละคลิป แต่ยังเอาเพลงอื่นของศิลปินเดียวกัน', () => {
+  const seed = yt('s1', 'Ed Sheeran - Perfect (Official Music Video)', 'Ed Sheeran');
+  const cands = [
+    yt('a', 'Perfect - Ed Sheeran (Lyrics)', 'Fan'),
+    yt('b', 'Ed Sheeran - Perfect [Live]', 'Ed Sheeran'),
+    yt('c', 'Perfect', 'Ed Sheeran - Topic'),
+    yt('d', 'Ed Sheeran - Shape of You', 'Ed Sheeran'),
+  ];
+  const picked = rankCandidates(cands, buildContext([], [seed], seed), 3, noRand);
+  assert.deepEqual(picked.map((p) => p.title), ['Ed Sheeran - Shape of You']);
+});
+
+test('rankCandidates: เพลงไทย "เพลง - ศิลปิน" → คลิปที่สลับเป็น "ศิลปิน - เพลง" ก็ถือเป็นเพลงเดิม', () => {
+  const seed = yt('s2', 'ปลายทาง - Bodyslam【Official MV】', 'GMMGrammy Official');
+  const cands = [
+    yt('e', 'Bodyslam - ปลายทาง (Lyrics)', 'Fan'),
+    yt('f', 'ปลายทาง (ร้องสด) - Bodyslam', 'GMM'),
+    yt('g', 'ปลายทาง', 'Bodyslam - Topic'),
+    yt('h', 'ความเชื่อ - Bodyslam', 'GMM'),
+  ];
+  const picked = rankCandidates(cands, buildContext([], [seed], seed), 3, noRand);
+  assert.deepEqual(picked.map((p) => p.title), ['ความเชื่อ - Bodyslam']);
+});
+
+test('searchQueryFor: รู้ชื่อศิลปิน → ค้นด้วยชื่อศิลปิน (ไม่ใช่ชื่อเพลงซึ่งได้แต่เพลงเดิม) · ไม่รู้ → ชื่อเพลงเต็ม', () => {
+  assert.equal(searchQueryFor(yt('1', 'Ed Sheeran - Perfect (Official Music Video)', 'Ed Sheeran'), new Set()), 'Ed Sheeran');
+  assert.equal(searchQueryFor(yt('2', 'ปลายทาง', 'Bodyslam - Topic'), new Set()), 'Bodyslam');
+  assert.equal(searchQueryFor(yt('3', 'ปลายทาง - Bodyslam【Official MV】', 'GMM'), new Set(['bodyslam'])), 'Bodyslam');
+  assert.equal(searchQueryFor(yt('4', 'ปลายทาง - Bodyslam【Official MV】', 'GMM'), new Set()), 'ปลายทาง - Bodyslam');
 });

@@ -27,8 +27,13 @@ const LYRIC_RE = /\b(lyrics?|lyric video)\b|เนื้อเพลง/i;
 const REMIX_RE = /\b(remix|mashup|edit|version)\b|รีมิกซ์/i;
 const OFFICIAL_RE = /\bofficial\b|ออฟฟิเชียล/i;
 
-// ชื่อเพลงหลัก (ส่วนแรกก่อน " - ") — กันได้เพลงเดิมเวอร์ชันอื่น
-export const songCore = (title) => cleanTitle(title).split(/\s[-–|]\s/)[0].toLowerCase();
+const SPLIT_RE = /\s[-–|]\s/;
+const partsOf = (title) =>
+  cleanTitle(title)
+    .split(SPLIT_RE)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2);
+const lowerParts = (title) => partsOf(title).map((part) => part.toLowerCase());
 
 // ตัวแทนศิลปิน = ชื่อช่อง (ตัด " - Topic" / VEVO / Official ออก) · เดาจากชื่อเพลงไม่ได้ เพราะไทยกับอังกฤษวางชื่อศิลปินคนละฝั่ง
 export function artistKey(item) {
@@ -37,6 +42,46 @@ export function artistKey(item) {
     .replace(CHANNEL_NOISE_RE, '')
     .trim()
     .toLowerCase();
+}
+
+// ---------- แยก "ชื่อศิลปิน" กับ "ชื่อเพลง" ในชื่อคลิป ----------
+// ชื่อคลิปมีทั้ง "ศิลปิน - เพลง" (ฝรั่ง) และ "เพลง - ศิลปิน" (ไทย) → เดาจากตำแหน่งไม่ได้ (bug 11-24: เคยถือท่อนแรกเป็นชื่อเพลงเสมอ
+// ฝรั่งเลยกันเพลงเดิมไม่อยู่ และกลับไปกันเพลงอื่นของศิลปินเดียวกันทิ้ง)
+// ท่อนที่ถือว่าเป็นศิลปิน: ตรงกับชื่อช่อง · ชื่อช่อง Topic · หรือโผล่คู่กับชื่อเพลงอื่นตั้งแต่ 2 เพลงขึ้นไป
+export function learnArtists(items) {
+  const artists = new Set();
+  const partners = new Map();
+  for (const item of items) {
+    const parts = lowerParts(item?.title);
+    const channel = artistKey(item);
+    if (channel && (TOPIC_RE.test(item?.channel ?? '') || parts.includes(channel))) artists.add(channel);
+    if (parts.length < 2) continue;
+    for (const part of parts) {
+      const set = partners.get(part) ?? new Set();
+      for (const other of parts) if (other !== part) set.add(other);
+      partners.set(part, set);
+    }
+  }
+  for (const [part, set] of partners) if (set.size >= 2) artists.add(part);
+  return artists;
+}
+
+// ชื่อเพลงของคลิป (ตัดท่อนที่เป็นศิลปินออก) · ไม่รู้ว่าท่อนไหนเป็นศิลปิน → คืนทุกท่อน
+export function songKeys(title, artists = new Set()) {
+  const parts = lowerParts(title);
+  const tracks = parts.filter((part) => !artists.has(part));
+  return tracks.length ? tracks : parts;
+}
+export const songCore = (title, artists) => songKeys(title, artists)[0] ?? '';
+const sharesKey = (keys, set) => keys.some((key) => set.has(key));
+
+// คำค้นหาเพลงต่อ: รู้ชื่อศิลปิน → ค้นชื่อศิลปิน (ค้นชื่อเพลงได้แต่เพลงเดิมคนละคลิป) · ไม่รู้ → ชื่อเพลงเต็มที่ล้างแล้ว
+export function searchQueryFor(item, artists) {
+  const channel = String(item?.channel ?? '');
+  if (TOPIC_RE.test(channel)) return channel.replace(TOPIC_RE, '').trim();
+  const known = new Set([...artists, artistKey(item)].filter(Boolean));
+  const artistPart = partsOf(item?.title).find((part) => known.has(part.toLowerCase()));
+  return artistPart ?? (cleanTitle(item?.title) || channel);
 }
 
 export const isJunk = (title) => JUNK_EN_RE.test(title) || JUNK_TH_RE.test(title);
@@ -104,10 +149,9 @@ export function pickSeed(history, current, lastSeedArtist, rand = Math.random) {
 
 // คะแนนผลค้น 1 รายการ · null = ทิ้ง
 export function scoreCandidate(cand, ctx) {
-  const { excludeVideoIds, excludeCores, disliked, seedArtist } = ctx;
+  const { excludeVideoIds, excludeCores, disliked, seedArtist, artists } = ctx;
   if (excludeVideoIds.has(cand.videoId) || isJunk(cand.title)) return null;
-  const core = songCore(cand.title);
-  if (core.length >= 2 && excludeCores.has(core)) return null;
+  if (sharesKey(songKeys(cand.title, artists), excludeCores)) return null;
   const key = artistKey(cand);
   // ศิลปินที่ห้องข้ามบ่อย → ไม่เอาเลย (แค่หักคะแนน ยังหลุดมาตอนผลค้นมีตัวเลือกน้อย)
   if (key && disliked.has(key)) return null;
@@ -121,7 +165,8 @@ export function scoreCandidate(cand, ctx) {
 }
 
 // เรียงตามคะแนน (+สุ่มนิดหน่อย) แล้วเลือก count เพลง · ศิลปินเดียวกันไม่เกิน MAX_PER_ARTIST · ชื่อเพลงซ้ำกันเอาตัวเดียว
-export function rankCandidates(cands, ctx, count, rand = Math.random) {
+export function rankCandidates(cands, baseCtx, count, rand = Math.random) {
+  const ctx = withCandidates(baseCtx, cands);
   const scored = [];
   for (const cand of cands) {
     const score = scoreCandidate(cand, ctx);
@@ -138,15 +183,15 @@ export function rankCandidates(cands, ctx, count, rand = Math.random) {
     for (const { cand } of scored) {
       if (picked.length >= count) return picked;
       const key = artistKey(cand);
-      const core = songCore(cand.title);
-      if (picked.includes(cand) || cores.has(core)) continue;
-      if (cap !== Infinity && held.has(core)) continue;
+      const keys = songKeys(cand.title, ctx.artists);
+      if (picked.includes(cand) || sharesKey(keys, cores)) continue;
+      if (cap !== Infinity && sharesKey(keys, held)) continue;
       if ((perArtist.get(key) ?? 0) >= cap) {
-        held.add(core);
+        for (const k of keys) held.add(k);
         continue;
       }
       perArtist.set(key, (perArtist.get(key) ?? 0) + 1);
-      cores.add(core);
+      for (const k of keys) cores.add(k);
       picked.push(cand);
     }
   }
@@ -154,12 +199,20 @@ export function rankCandidates(cands, ctx, count, rand = Math.random) {
 }
 
 // ของที่ห้ามแนะนำซ้ำ: ทุกเพลงในคิว + ทุกเพลงที่เคยเล่นในห้อง (ทั้ง id และชื่อเพลงหลัก)
+// excludeCores = ชื่อเพลง (songKeys) ของทุกเพลงพวกนี้ · artists = ท่อนที่รู้ว่าเป็นศิลปิน (ใช้แยกชื่อเพลง)
 export function buildContext(history, queue, seed) {
-  const all = [...history, ...queue];
-  return {
-    excludeVideoIds: new Set(all.map((item) => item.videoId)),
-    excludeCores: new Set(all.map((item) => songCore(item.title)).filter((core) => core.length >= 2)),
-    disliked: skippedArtists(history),
-    seedArtist: artistKey(seed),
-  };
+  const seen = [...history, ...queue];
+  return withCandidates(
+    { seen, excludeVideoIds: new Set(seen.map((item) => item.videoId)), disliked: skippedArtists(history), seedArtist: artistKey(seed) },
+    [],
+  );
+}
+
+// เรียนชื่อศิลปินเพิ่มจากผลค้นด้วย (เช่นผลค้นมีช่อง Topic ของศิลปิน) แล้วคำนวณชื่อเพลงที่ห้ามซ้ำใหม่ · คืน ctx ใหม่ ไม่แก้ของเดิม
+export function withCandidates(ctx, cands) {
+  const seen = ctx.seen ?? [];
+  const artists = learnArtists([...seen, ...cands]);
+  const excludeCores = new Set(ctx.extraCores ?? []); // extraCores = ชื่อเพลงที่ห้ามซ้ำที่ไม่มีคลิป (เช่นส่งมาจาก test)
+  for (const item of seen) for (const key of songKeys(item.title, artists)) excludeCores.add(key);
+  return { ...ctx, artists, excludeCores };
 }

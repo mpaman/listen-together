@@ -4,7 +4,7 @@
 // Last.fm หาไม่เจอ/ล่ม/ไม่มี key → ได้ผลแบบขั้น 1 ล้วน (ไม่ทำให้การเติมเพลงพัง)
 // deps ส่งเข้ามา (ไม่ import ตรง) จะได้ test ได้โดยไม่ยิงเน็ต
 import { chooseSimilar, bestMatch } from './lastfm.js';
-import { artistKey, buildContext, pickSeed, rankCandidates, scoreCandidate, songCore } from './taste.js';
+import { artistKey, buildContext, pickSeed, rankCandidates, scoreCandidate, searchQueryFor, withCandidates } from './taste.js';
 
 export const LASTFM_SHARE = 2; // ใน 3 เพลงที่เติม เป็นศิลปินใหม่จาก Last.fm กี่เพลง
 // โควตา YouTube (หน่วย): search = 100 · ถามความยาว = 1
@@ -20,13 +20,14 @@ export function estimateUnits(useLastfm) {
 export async function pickAutofill({ seed, history, queue, lastSeedArtist, count }, deps) {
   const { search, keepSongLength, suggestCandidates, findSimilar, useLastfm, onError = () => {}, rand = Math.random } = deps;
   const base = pickSeed(history, seed, lastSeedArtist, rand);
-  const ctx = buildContext(history, queue, base);
+  let ctx = buildContext(history, queue, base);
   const picks = [];
   let units = 0;
+  // เพลงที่เลือกแล้วนับเป็น "เคยเห็น" → รอบถัดไปไม่เลือกเพลงเดียวกันคนละคลิปซ้ำ
   const take = (item) => {
     picks.push(item);
     ctx.excludeVideoIds.add(item.videoId);
-    ctx.excludeCores.add(songCore(item.title));
+    ctx = withCandidates({ ...ctx, seen: [...ctx.seen, item] }, []);
   };
 
   if (useLastfm) {
@@ -52,7 +53,7 @@ export async function pickAutofill({ seed, history, queue, lastSeedArtist, count
   const familiar = [];
   if (picks.length < count) {
     units += UNITS_SEARCH + UNITS_LENGTH;
-    const cands = await suggestCandidates(base, ctx.excludeVideoIds);
+    const cands = await suggestCandidates(searchQueryFor(base, ctx.artists), ctx.excludeVideoIds);
     familiar.push(...rankCandidates(cands, ctx, count - picks.length, rand));
   }
   // สลับ ใหม่-คุ้น-ใหม่ ไม่ให้ศิลปินแปลกหน้ามาติดกันหมด
