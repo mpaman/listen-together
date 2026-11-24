@@ -6,6 +6,8 @@ import {
   buildContext,
   HISTORY_MAX,
   isJunk,
+  isLabelChannel,
+  learnArtists,
   outcomeOf,
   pickSeed,
   rankCandidates,
@@ -209,4 +211,27 @@ test('rankCandidates: ศิลปินร่วม (PUN, THE TOYS / PUN x THE 
   assert.equal(searchQueryFor(seed, ctx.artists), 'PUN');
   const picked = rankCandidates(cands, ctx, 3, noRand);
   assert.deepEqual(picked.map((p) => p.title).sort(), ['PUN - ถ้าเธอ (Official MV)', 'THE TOYS - ก่อนฤดูฝน']);
+});
+
+// ชื่อช่องที่ไม่ใช่ค่าย/ช่องเนื้อเพลง = ศิลปิน แม้ชื่อคลิปไม่มีชื่อศิลปิน · ช่องค่าย → เดาจากชื่อคลิปเหมือนเดิม
+test('isLabelChannel: ค่ายเพลง / ช่องเนื้อเพลง / ช่องรวมเพลง = ไม่ใช่ศิลปิน', () => {
+  for (const ch of ['GMMGrammy Official', 'GMM GRAMMY', 'RS Music', 'Warner Music Thailand', 'Sony Music Entertainment', 'Genie Records', 'Smallroom', 'What The Duck', 'SpicyDisc', 'Muzik Move', 'เนื้อเพลงฮิต', 'Thai Lyrics Channel', 'ซับไทย by มิว', 'Karaoke Hits', 'Universal Music Group']) {
+    assert.equal(isLabelChannel(ch), true, ch);
+  }
+  for (const ch of ['PUN', 'Bodyslam', 'EdSheeranVEVO', 'Taylor Swift', 'Bodyslam - Topic', 'PALMY Official']) {
+    assert.equal(isLabelChannel(ch), false, ch);
+  }
+});
+
+test('searchQueryFor: ช่องศิลปินที่ชื่อคลิปไม่มีชื่อศิลปิน → ค้นชื่อช่อง · ช่องค่าย → ชื่อเพลงเต็ม (ไม่ค้นชื่อค่าย)', () => {
+  assert.equal(searchQueryFor(yt('1', 'เขียว เหลือง แดง (Get high) [Official MV]', 'PUN'), new Set()), 'PUN');
+  assert.equal(searchQueryFor(yt('2', 'Fix You', 'ColdplayVEVO'), new Set()), 'Coldplay');
+  assert.equal(searchQueryFor(yt('3', 'ปลายทาง - Bodyslam', 'GMMGrammy Official'), new Set()), 'ปลายทาง - Bodyslam');
+  assert.equal(searchQueryFor(yt('4', 'ปลายทาง', 'เนื้อเพลงฮิต'), new Set()), 'ปลายทาง');
+});
+
+test('learnArtists: ช่องศิลปินนับเป็นศิลปินแม้ชื่อคลิปไม่มีชื่อช่อง · ช่องค่ายไม่นับ', () => {
+  const artists = learnArtists([yt('1', 'ถ้าเธอ', 'PUN'), yt('2', 'ปลายทาง', 'GMMGrammy Official')]);
+  assert.ok(artists.has('pun'));
+  assert.ok(!artists.has('gmmgrammy'));
 });

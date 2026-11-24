@@ -53,6 +53,26 @@ export function artistKey(item) {
     .toLowerCase();
 }
 
+// ---------- ช่องค่ายเพลง / ช่องเนื้อเพลง (ชื่อช่องไม่ใช่ศิลปิน) ----------
+// ช่องอื่นนอกจากนี้ถือว่าเป็นช่องของศิลปิน → ใช้ชื่อช่องเป็นศิลปินได้เลย แม้ชื่อคลิปไม่มีชื่อศิลปิน (Man ขอ 11-24)
+// เทียบแบบตัดช่องว่าง ("SpicyDisc" = "Spicy Disc") · เจอค่ายใหม่ที่หลุด → เพิ่มชื่อที่นี่
+const LABEL_NAMES = [
+  'gmm', 'grammy', 'rsiam', 'rsmusic', 'warner', 'sonymusic', 'universalmusic', 'umg', 'genierecords', 'smallroom',
+  'whattheduck', 'spicydisc', 'muzikmove', 'kamikaze', 'heartrocker', 'boxxmusic', 'merecords', 'bananarecord', 'teromusic', 'chindarecords',
+];
+const LABEL_WORDS_RE = /records?\b|entertainment|lyrics?|\blabel\b|karaoke|เนื้อเพลง|ซับไทย|แปลไทย|คาราโอเกะ|เพลงฮิต|รวมเพลง|playlist/i;
+
+export function isLabelChannel(channel) {
+  const raw = String(channel ?? '');
+  if (TOPIC_RE.test(raw)) return false;
+  const compact = raw.toLowerCase().replace(/\s+/g, '');
+  return LABEL_NAMES.some((name) => compact.includes(name)) || LABEL_WORDS_RE.test(raw);
+}
+
+// ชื่อช่องเชื่อเป็นศิลปินได้ไหม: ไม่ใช่ค่าย/ช่องเนื้อเพลง และคลิปไม่ใช่คลิปเนื้อเพลงที่คนอื่นอัป (ช่องชื่อคนทั่วไปมักอัปแบบนี้)
+const trustsChannel = (item) => !isLabelChannel(item?.channel) && !LYRIC_RE.test(String(item?.title ?? ''));
+const channelName = (item) => String(item?.channel ?? '').replace(TOPIC_RE, '').replace(CHANNEL_NOISE_RE, '').trim();
+
 // ---------- แยก "ชื่อศิลปิน" กับ "ชื่อเพลง" ในชื่อคลิป ----------
 // ชื่อคลิปมีทั้ง "ศิลปิน - เพลง" (ฝรั่ง) และ "เพลง - ศิลปิน" (ไทย) → เดาจากตำแหน่งไม่ได้ (bug 11-24: เคยถือท่อนแรกเป็นชื่อเพลงเสมอ
 // ฝรั่งเลยกันเพลงเดิมไม่อยู่ และกลับไปกันเพลงอื่นของศิลปินเดียวกันทิ้ง)
@@ -68,7 +88,7 @@ export function learnArtists(items) {
     if (!channel) return;
     const hit = titles[i].find((part) => lowerNames(part).includes(channel));
     if (hit) for (const name of lowerNames(hit)) artists.add(name);
-    else if (TOPIC_RE.test(item?.channel ?? '')) artists.add(channel);
+    else if (TOPIC_RE.test(item?.channel ?? '') || trustsChannel(item)) artists.add(channel);
   });
   const partnerId = (part) => (isArtistPart(part, artists) ? '@artist' : lowerNames(part).sort().join('|'));
   const partners = new Map();
@@ -101,8 +121,10 @@ export function searchQueryFor(item, artists) {
   // ชอบชื่อช่องก่อน (ช่อง PUN ค้น "PUN" ไม่ใช่ "PUN, THE TOYS" ซึ่งได้แต่เพลงที่ร้องร่วมกัน)
   const own = artistKey(item);
   const names = partsOf(item?.title).flatMap(namesIn);
-  const artist = names.find((name) => name.toLowerCase() === own) ?? names.find((name) => artists.has(name.toLowerCase()));
-  return artist ?? (cleanTitle(item?.title) || channel);
+  const inTitle = names.find((name) => name.toLowerCase() === own);
+  if (inTitle) return inTitle;
+  if (own && trustsChannel(item)) return channelName(item);
+  return names.find((name) => artists.has(name.toLowerCase())) ?? (cleanTitle(item?.title) || channel);
 }
 
 export const isJunk = (title) => JUNK_EN_RE.test(title) || JUNK_TH_RE.test(title);
