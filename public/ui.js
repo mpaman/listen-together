@@ -48,6 +48,7 @@ function songRow(item, sub) {
 // ---------- ผลค้นหา (popover) ----------
 // onAddAll (ถ้ามี) = ผลจาก playlist → มีปุ่ม "เพิ่มทั้งหมด" แถวบนสุด
 export function renderResults(items, label, onAdd, { onAddAll } = {}) {
+  $('chart-bar').hidden = true;
   $('results-label').textContent = label;
   const list = $('results');
   list.replaceChildren();
@@ -88,6 +89,102 @@ export function renderResults(items, label, onAdd, { onAddAll } = {}) {
 
 export function setPopover(open) {
   $('results-pop').hidden = !open;
+}
+
+// ---------- ชาร์ต Top 50 (ใช้ popover เดียวกับผลค้นหา) ----------
+// โชว์ 10 อันดับแรกก่อน ที่เหลือซ่อนไว้หลังปุ่ม "ดูอันดับ 11–N" (กล่องไม่ยาวเต็มจอ)
+const CHART_FIRST = 10;
+const SKELETON_ROWS = 5;
+
+function markAdded(btn) {
+  btn.replaceChildren(icon('check'));
+  btn.classList.add('is-done');
+  btn.disabled = true;
+}
+
+// getRows = ปุ่มรายเพลงที่ต้องติ๊กตาม (ส่งเป็นฟังก์ชัน เพราะปุ่มนี้สร้างก่อนแถวเพลง)
+function addManyButton(label, doneLabel, onClick, getRows) {
+  const btn = el('button', 'add-all', label);
+  btn.type = 'button';
+  btn.prepend(icon('plus'));
+  btn.addEventListener('click', () => {
+    onClick();
+    btn.replaceChildren(icon('check'), document.createTextNode(doneLabel));
+    btn.disabled = true;
+    for (const add of getRows()) if (!add.disabled) markAdded(add);
+  });
+  return btn;
+}
+
+function renderRegionChips(regions, current, onRegion) {
+  const bar = $('chart-bar');
+  bar.replaceChildren();
+  for (const { id, label } of regions) {
+    const chip = el('button', 'chart-chip', label);
+    chip.type = 'button';
+    chip.setAttribute('aria-pressed', String(id === current));
+    chip.addEventListener('click', () => id !== current && onRegion(id));
+    bar.append(chip);
+  }
+  bar.hidden = false;
+}
+
+// state: { region, regions, items?, loading?, error? } · on: { onAdd, onAddMany, onRegion }
+export function renderChart({ region, regions, items = [], loading = false, error = '' }, { onAdd, onAddMany, onRegion }) {
+  const regionLabel = regions.find((r) => r.id === region)?.label ?? region;
+  $('results-label').textContent = loading || error ? `Top 50 มาแรง · ${regionLabel}` : `Top ${items.length} มาแรง · ${regionLabel}`;
+  renderRegionChips(regions, region, onRegion);
+  const list = $('results');
+  list.replaceChildren();
+  setPopover(true);
+  list.setAttribute('aria-busy', String(loading));
+  if (loading) {
+    for (let i = 0; i < SKELETON_ROWS; i += 1) list.append(el('li', 'song is-skeleton'));
+    return;
+  }
+  if (error || items.length === 0) {
+    list.append(el('li', 'empty', error || 'ยังไม่มีชาร์ตของประเทศนี้'));
+    return;
+  }
+
+  const rowButtons = [];
+  const actions = el('li', 'add-all-row chart-actions');
+  const top = items.slice(0, CHART_FIRST);
+  actions.append(addManyButton(`เพิ่ม ${top.length} อันดับแรก`, `เพิ่ม ${top.length} เพลงแล้ว`, () => onAddMany(top), () => rowButtons.slice(0, CHART_FIRST)));
+  if (items.length > CHART_FIRST) {
+    actions.append(addManyButton(`ทั้งหมด ${items.length}`, `เพิ่ม ${items.length} เพลงแล้ว`, () => onAddMany(items), () => rowButtons));
+  }
+  list.append(actions);
+
+  const rest = [];
+  items.forEach((item, i) => {
+    const { row } = songRow(item, item.channel || 'YouTube');
+    row.classList.add('is-ranked');
+    row.prepend(el('span', 'rank', String(i + 1)));
+    const add = iconButton('plus', `เพิ่ม ${item.title} เข้าคิว`, 'icon-btn add');
+    add.addEventListener('click', () => {
+      onAdd(item);
+      markAdded(add);
+    });
+    rowButtons.push(add);
+    row.append(add);
+    if (i >= CHART_FIRST) {
+      row.hidden = true;
+      rest.push(row);
+    }
+    list.append(row);
+  });
+  if (rest.length) {
+    const more = el('button', 'show-more', `ดูอันดับ ${CHART_FIRST + 1}–${items.length}`);
+    more.type = 'button';
+    more.addEventListener('click', () => {
+      for (const row of rest) row.hidden = false;
+      more.parentElement.remove();
+    });
+    const li = el('li', 'show-more-row');
+    li.append(more);
+    list.append(li);
+  }
 }
 
 // ---------- คิว ----------

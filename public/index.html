@@ -51,6 +51,7 @@
     <symbol id="i-angry" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m7.6 8 3 1.6M16.4 8l-3 1.6"/><path d="M8.8 11.6h.01M15.2 11.6h.01" stroke-width="2.6"/><path d="M9 16.2h6"/></g></symbol>
     <symbol id="i-drop" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m7.5 9.5 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/></g></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3.5c.5 3.9 2.6 6 6.5 6.5-3.9.5-6 2.6-6.5 6.5-.5-3.9-2.6-6-6.5-6.5 3.9-.5 6-2.6 6.5-6.5zM18.5 15c.25 1.7 1.05 2.5 2.75 2.75-1.7.25-2.5 1.05-2.75 2.75-.25-1.7-1.05-2.5-2.75-2.75 1.7-.25 2.5-1.05 2.75-2.75z"/></symbol>
+    <symbol id="i-flame" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 3c.6 3.2-2.6 4.8-2.6 8.3a2.6 2.6 0 0 0 5.2 0c0-1 .4-1.9 1-2.6 1.8 1.4 2.9 3.4 2.9 5.6A6.5 6.5 0 0 1 12 20.8a6.5 6.5 0 0 1-6.5-6.5C5.5 9 12 7.6 12 3z"/></symbol>
     <!-- จอบนเวที (MV / ปกเพลง / เนื้อเพลง) + กันจอดับ -->
     <symbol id="i-video" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path fill="currentColor" stroke="none" d="M10 9.4v5.2a.6.6 0 0 0 .9.5l4.2-2.6a.6.6 0 0 0 0-1l-4.2-2.6a.6.6 0 0 0-.9.5z"/></g></symbol>
     <symbol id="i-disc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/></g></symbol>
@@ -248,6 +249,11 @@
           <input id="search-input" type="search" placeholder="ชื่อเพลง ศิลปิน หรือวางลิงก์" maxlength="300" aria-label="ค้นเพลง" />
           <button type="submit" class="search-go">ค้น</button>
         </form>
+        <!-- ชาร์ตเพลงมาแรงของ YouTube (1 หน่วยโควตา ได้ 50 เพลง · server cache 3 ชม.) -->
+        <button type="button" class="chart-open" id="chart-open" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-flame"/></svg>
+          Top 50 เพลงมาแรง
+        </button>
         <div class="popover" id="results-pop" hidden>
           <div class="popover-head">
             <span id="results-label">ผลการค้นหา</span>
@@ -255,6 +261,7 @@
               <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
             </button>
           </div>
+          <div class="chart-bar" id="chart-bar" role="group" aria-label="เลือกประเทศของชาร์ต" hidden></div>
           <ul class="list" id="results"></ul>
         </div>
         <p class="hint" id="search-hint" role="status"></p>

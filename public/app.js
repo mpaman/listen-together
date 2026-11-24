@@ -526,6 +526,38 @@ async function runSearch(text) {
   }
 }
 
+// ---------- ชาร์ต Top 50 ----------
+// server cache ไว้ 3 ชม. อยู่แล้ว · ฝั่งเว็บจำไว้อีก 10 นาที กดสลับประเทศไปมาไม่ต้องรอโหลดซ้ำ
+const CHART_REGIONS = [
+  { id: 'TH', label: 'ไทย' },
+  { id: 'US', label: 'สากล' },
+  { id: 'KR', label: 'เกาหลี' },
+];
+const CHART_STORE_KEY = 'listen-together:chart-region';
+const CHART_CLIENT_TTL_MS = 10 * 60 * 1000;
+const chartCache = new Map();
+let chartRegion = CHART_REGIONS.some((r) => r.id === localStorage.getItem(CHART_STORE_KEY)) ? localStorage.getItem(CHART_STORE_KEY) : 'TH';
+
+const chartHandlers = { onAdd: addToQueue, onAddMany: addAllToQueue, onRegion: (id) => showChart(id) };
+
+async function showChart(region = chartRegion) {
+  chartRegion = region;
+  localStorage.setItem(CHART_STORE_KEY, region);
+  ui.setHint('');
+  const base = { region, regions: CHART_REGIONS };
+  const hit = chartCache.get(region);
+  if (hit && Date.now() - hit.at < CHART_CLIENT_TTL_MS) return ui.renderChart({ ...base, items: hit.items }, chartHandlers);
+  ui.renderChart({ ...base, loading: true }, chartHandlers);
+  try {
+    const { items } = await getJson(`/api/top?region=${region}`);
+    chartCache.set(region, { at: Date.now(), items });
+    // กดสลับประเทศเร็วๆ → วาดเฉพาะประเทศที่เลือกล่าสุด
+    if (chartRegion === region) ui.renderChart({ ...base, items }, chartHandlers);
+  } catch (err) {
+    if (chartRegion === region) ui.renderChart({ ...base, error: err.message }, chartHandlers);
+  }
+}
+
 // ---------- ผูกปุ่ม ----------
 // หน้าหลัก (เปิดเว็บเปล่าๆ): รายการห้องที่เปิดอยู่ กดแล้วเข้าเลย + ช่องสร้างห้องใหม่
 function setupRoomPicker() {
@@ -617,6 +649,7 @@ function bindSearch() {
     runSearch($('search-input').value);
   });
   $('results-close').addEventListener('click', () => ui.setPopover(false));
+  $('chart-open').addEventListener('click', () => showChart());
   document.addEventListener('keydown', (e) => e.key === 'Escape' && ui.setPopover(false));
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest('.search-wrap')) ui.setPopover(false);
@@ -662,6 +695,8 @@ async function main() {
   getJson('/api/config')
     .then((cfg) => {
       searchEnabled = cfg.searchEnabled;
+      // ชาร์ตใช้ YouTube API เหมือนการค้น → ไม่มี key ก็ไม่โชว์ปุ่ม
+      $('chart-open').hidden = !searchEnabled;
       if (!searchEnabled) ui.setHint('ยังไม่มี API key: วางลิงก์จาก YouTube Music แทนได้');
     })
     .catch(() => {});

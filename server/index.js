@@ -10,8 +10,8 @@ import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cooldownLeftSec, decideHostStart, HOST_GRACE_MS } from './host.js';
 import { cleanHostState, cleanName, isRoomId, makeQueueItem, normalizeRoomId, sanitizeAction } from './validate.js';
 import { zipFolder } from './zip.js';
-import { fetchPlaylist, isAutoMix, isVideoId, keepSongLength, parsePlaylistId, resolveLink, search, suggestCandidates } from './youtube.js';
-import { outcomeOf, recordOutcome } from './taste.js';
+import { CHART_REGIONS, fetchPlaylist, fetchTopChart, isAutoMix, isVideoId, keepSongLength, parsePlaylistId, resolveLink, search, suggestCandidates } from './youtube.js';
+import { isJunk, outcomeOf, recordOutcome } from './taste.js';
 import { findSimilar } from './lastfm.js';
 import { estimateUnits, pickAutofill } from './autofill.js';
 import { findLyrics } from './lyrics.js';
@@ -85,6 +85,21 @@ app.get('/api/search', async (req, res) => {
     console.error('[search]', err.message);
     const quota = err.status === 403;
     return res.status(quota ? 429 : 502).json({ error: quota ? 'โควต้าค้นหาวันนี้หมดแล้ว — วางลิงก์เพลงแทนได้' : 'ค้นหาไม่สำเร็จ' });
+  }
+});
+
+// Top 50 เพลงมาแรงของประเทศ (TH/US/KR) · cache 3 ชม. ทั้ง server → แทบไม่กินโควตา
+app.get('/api/top', async (req, res) => {
+  const region = String(req.query.region ?? 'TH').toUpperCase();
+  if (!CHART_REGIONS.includes(region)) return res.status(400).json({ error: 'ไม่มีชาร์ตของประเทศนี้' });
+  if (!API_KEY) return res.status(503).json({ error: 'ยังไม่ได้ตั้ง YOUTUBE_API_KEY — ดูชาร์ตไม่ได้' });
+  try {
+    const chart = await fetchTopChart(region, API_KEY, { isJunk });
+    return res.json({ region, ...chart });
+  } catch (err) {
+    console.error('[top]', err.message);
+    const quota = err.status === 403;
+    return res.status(quota ? 429 : 502).json({ error: quota ? 'โควต้าวันนี้หมดแล้ว ลองใหม่พรุ่งนี้' : 'ดึงชาร์ตไม่สำเร็จ' });
   }
 });
 

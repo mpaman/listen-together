@@ -1198,3 +1198,75 @@ body.is-playing .stage[data-view='cover'] .cover-art { animation: cover-breathe 
 @media (prefers-reduced-motion: reduce) {
   .lyrics-scroll { scroll-behavior: auto; }
 }
+
+/* ---------- ชาร์ต Top 50 (ใน popover ผลค้นหา) ---------- */
+/* ปุ่มเปิดชาร์ตใต้ช่องค้น: เม็ดยาเล็ก ไม่แย่งสายตาจากช่องค้น แต่สูงพอให้นิ้วกด */
+.chart-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  margin: 8px 2px 0;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.82rem;
+  transition: color var(--t-fast) ease-out, border-color var(--t-fast) ease-out, background-color var(--t-fast) ease-out;
+}
+.chart-open[hidden] { display: none; }
+.chart-open .icon { width: 16px; height: 16px; color: var(--coral); }
+.chart-open:hover { color: var(--text); border-color: var(--line-strong); background: var(--surface-2); }
+
+.chart-bar { display: flex; gap: 6px; padding: 0 4px 8px; }
+.chart-bar[hidden] { display: none; }
+.chart-chip {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 0.8rem;
+  transition: color var(--t-fast) ease-out, background-color var(--t-fast) ease-out, border-color var(--t-fast) ease-out;
+}
+.chart-chip:hover { color: var(--text); }
+.chart-chip[aria-pressed='true'] { background: var(--amber); border-color: var(--amber); color: var(--on-accent); font-weight: 600; }
+
+.chart-actions { display: flex; gap: 8px; }
+.chart-actions .add-all:nth-child(2) { flex: 0 0 auto; width: auto; padding: 0 14px; background: var(--surface-3); color: var(--text); box-shadow: none; }
+.chart-actions .add-all:nth-child(2):hover:not(:disabled) { background: var(--line-strong); }
+
+/* อันดับ: ตัวเลขช่องแรก · 3 อันดับแรกสีเด่น */
+.song.is-ranked { grid-template-columns: 24px 64px minmax(0, 1fr) auto; }
+.rank {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  text-align: center;
+}
+.song.is-ranked:nth-child(-n + 4) .rank { color: var(--amber); }
+
+.show-more-row { padding: 6px 4px 2px; }
+.show-more {
+  width: 100%;
+  min-height: 40px;
+  border-radius: var(--r-row);
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.show-more:hover { color: var(--text); background: var(--surface-3); }
+
+/* กำลังโหลด: แถวโครงร่างจองที่ไว้ (กล่องไม่กระตุกตอนข้อมูลมา) */
+.song.is-skeleton {
+  min-height: 52px;
+  margin-bottom: 4px;
+  background: linear-gradient(90deg, var(--surface-3) 0 30%, var(--line-strong) 50%, var(--surface-3) 70% 100%) 0 0 / 300% 100%;
+  opacity: 0.55;
+  animation: skeleton 1.2s linear infinite;
+}
+@keyframes skeleton { to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .song.is-skeleton { animation: none; } }

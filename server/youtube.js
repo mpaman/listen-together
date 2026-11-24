@@ -216,3 +216,59 @@ export async function search(query, apiKey) {
   writeCache(key, results, Date.now());
   return results;
 }
+
+// ---------- ชาร์ตเพลงยอดนิยม (Top 50) ----------
+// videos?chart=mostPopular หมวดเพลง = "กำลังมาแรงบน YouTube" ของประเทศนั้น (ไม่ใช่ยอดสตรีมแบบ Spotify)
+// เรียก 1 ครั้ง = 1 หน่วยโควตา ได้สูงสุด 50 คลิป (เอามากกว่านี้ต้องเปิดหน้าถัดไป หน้าละ 1 หน่วย) · API บังคับระบุประเทศ ไม่มีชาร์ตทั่วโลก
+export const CHART_REGIONS = ['TH', 'US', 'KR'];
+const CHART_MAX = 50;
+const CHART_TTL_MS = 3 * 60 * 60 * 1000; // ชาร์ตเปลี่ยนช้า ดึงใหม่ทุก 3 ชม. พอ (วันละไม่เกิน 8 หน่วยต่อประเทศ)
+const chartCache = new Map(); // region → { at, items }
+const chartInflight = new Map(); // region → Promise (หลายคนเปิดพร้อมกันยิง API ครั้งเดียว)
+
+// คลิปที่เปิดในเว็บไม่ได้ / ยาวหรือสั้นผิดปกติ / ของปลอม (isJunk ส่งมาจาก taste.js กัน import วน)
+export function mapChartItems(items, isJunk = () => false) {
+  const songs = [];
+  for (const v of items ?? []) {
+    const sec = parseIsoDuration(v?.contentDetails?.duration);
+    const title = decodeEntities(v?.snippet?.title);
+    if (!isVideoId(v?.id) || v?.status?.embeddable === false) continue;
+    if (sec < SONG_MIN_SEC || sec > SONG_MAX_SEC || isJunk(title)) continue;
+    songs.push({ videoId: v.id, title, channel: decodeEntities(v.snippet?.channelTitle), thumb: thumbnailFor(v.id) });
+  }
+  return songs;
+}
+
+async function loadChart(region, apiKey, isJunk) {
+  const params = new URLSearchParams({
+    part: 'snippet,contentDetails,status',
+    chart: 'mostPopular',
+    videoCategoryId: '10',
+    regionCode: region,
+    maxResults: String(CHART_MAX),
+    key: apiKey,
+  });
+  const data = await fetchJson(`https://www.googleapis.com/youtube/v3/videos?${params}`);
+  return mapChartItems(data.items, isJunk);
+}
+
+// คืน { items, updatedAt } · ดึงไม่สำเร็จแต่มีของเก่า → ส่งของเก่า (ชาร์ตเก่าไม่กี่ชั่วโมงดีกว่าว่าง)
+export async function fetchTopChart(region, apiKey, { isJunk, now = Date.now() } = {}) {
+  const hit = chartCache.get(region);
+  if (hit && now - hit.at < CHART_TTL_MS) return { items: hit.items, updatedAt: hit.at };
+  if (!chartInflight.has(region)) {
+    const job = loadChart(region, apiKey, isJunk)
+      .then((items) => {
+        chartCache.set(region, { at: now, items });
+        return { items, updatedAt: now };
+      })
+      .finally(() => chartInflight.delete(region));
+    chartInflight.set(region, job);
+  }
+  try {
+    return await chartInflight.get(region);
+  } catch (err) {
+    if (hit) return { items: hit.items, updatedAt: hit.at };
+    throw err;
+  }
+}
