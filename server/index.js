@@ -15,6 +15,7 @@ import { isJunk, outcomeOf, recordOutcome } from './taste.js';
 import { findSimilar } from './lastfm.js';
 import { estimateUnits, pickAutofill } from './autofill.js';
 import { findLyrics } from './lyrics.js';
+import { translateLines } from './translate.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.YOUTUBE_API_KEY ?? '';
@@ -131,18 +132,41 @@ app.get('/api/playlist', async (req, res) => {
 
 // เนื้อเพลงของเพลงที่เล่นอยู่ (หน้าเว็บส่งชื่อ/ช่อง/ความยาวมา) — ไม่เจอ = 404 ให้หน้าเว็บโชว์ "ไม่มีเนื้อเพลง"
 const MAX_SONG_SEC = 3 * 60 * 60;
+// query ของเพลง (ใช้ทั้งเนื้อเพลงและคำแปล) · ข้อมูลไม่ครบ → null
+function songQuery(query) {
+  const videoId = String(query.v ?? '');
+  const title = String(query.title ?? '').slice(0, 200);
+  const channel = String(query.channel ?? '').slice(0, 100);
+  const duration = Math.min(Math.max(Number(query.d) || 0, 0), MAX_SONG_SEC);
+  return isVideoId(videoId) && title.trim() ? { videoId, title, channel, duration } : null;
+}
+
 app.get('/api/lyrics', async (req, res) => {
-  const videoId = String(req.query.v ?? '');
-  const title = String(req.query.title ?? '').slice(0, 200);
-  const channel = String(req.query.channel ?? '').slice(0, 100);
-  const duration = Math.min(Math.max(Number(req.query.d) || 0, 0), MAX_SONG_SEC);
-  if (!isVideoId(videoId) || !title.trim()) return res.status(400).json({ error: 'ข้อมูลเพลงไม่ครบ' });
+  const song = songQuery(req.query);
+  if (!song) return res.status(400).json({ error: 'ข้อมูลเพลงไม่ครบ' });
   try {
-    const lyrics = await findLyrics({ videoId, title, channel, duration });
+    const lyrics = await findLyrics(song);
     return lyrics ? res.json(lyrics) : res.status(404).json({ error: 'ไม่พบเนื้อเพลงนี้' });
   } catch (err) {
     console.error('[lyrics]', err.message);
     return res.status(502).json({ error: 'ดึงเนื้อเพลงไม่สำเร็จ ลองใหม่อีกที' });
+  }
+});
+
+// คำแปลไทยของเนื้อเพลงเดียวกับ /api/lyrics (ดึงเนื้อจาก cache ไม่ยิง LRCLIB ซ้ำ)
+// คืน { lang, lines } ยาวเท่าบรรทัดเนื้อเพลง · เพลงไทย/ไม่มีเนื้อ/แปลจับคู่ไม่ได้ → { lines: null }
+app.get('/api/lyrics/th', async (req, res) => {
+  const song = songQuery(req.query);
+  if (!song) return res.status(400).json({ error: 'ข้อมูลเพลงไม่ครบ' });
+  try {
+    const lyrics = await findLyrics(song);
+    const texts = lyrics?.synced ? lyrics.synced.map((l) => l.text) : lyrics?.plain?.split(/\r?\n/);
+    if (!texts) return res.json({ lines: null });
+    const key = `${song.videoId}:${Math.round(song.duration / 10)}:${lyrics.synced ? 's' : 'p'}`;
+    return res.json((await translateLines(key, texts)) ?? { lines: null });
+  } catch (err) {
+    console.error('[translate]', err.message);
+    return res.status(502).json({ error: 'แปลเนื้อเพลงไม่สำเร็จ' });
   }
 });
 

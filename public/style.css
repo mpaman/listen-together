@@ -889,6 +889,8 @@ a.room-btn { text-decoration: none; }
 
 .lounge-bar { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .lounge-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lounge-zoom { display: inline-flex; gap: 2px; margin-left: auto; }
+.lounge-actions .lounge-zoom + .reroll { margin-left: 0; }
 .act, .emo {
   display: inline-flex;
   align-items: center;
@@ -1187,6 +1189,29 @@ body.is-playing .stage[data-view='cover'] .cover-art { animation: cover-breathe 
 .lyrics-offset { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 999px; background: rgba(8, 8, 26, 0.55); }
 .lyrics-offset .icon-btn { width: 36px; height: 36px; border-radius: 999px; }
 .lyrics-offset-value { min-width: 5.2em; text-align: center; font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* ปุ่มเปิด/ปิดคำแปล: ปิด = จาง · เปิด = ตัวหนังสือสี action (บอกสถานะด้วย aria-pressed ไม่ใช่สีอย่างเดียว) */
+.lyrics-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(8, 8, 26, 0.55);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: color var(--t-fast) ease, background-color var(--t-fast) ease;
+}
+.lyrics-th .icon { width: 16px; height: 16px; }
+.lyrics-th[aria-pressed='true'] { color: var(--amber); background: rgba(34, 197, 94, 0.14); }
+.lyrics-th:hover { color: var(--text); }
+.lyrics-th:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.lyrics-th[hidden] { display: none; }
+/* คำแปลใต้บรรทัด: เล็กกว่า บางกว่า ห่อบรรทัดได้ ไม่ตัดคำ */
+.lyric-th { display: block; margin-top: 2px; font-family: var(--font-ui); font-weight: 500; font-size: 0.58em; line-height: 1.45; letter-spacing: 0; color: rgba(248, 250, 252, 0.5); }
+.is-active .lyric-th { color: rgba(248, 250, 252, 0.85); }
+.lyric-plain .lyric-th { font-size: 0.85em; }
 .lyrics-credit { margin-left: auto; font-size: 0.72rem; color: rgba(248, 250, 252, 0.45); }
 
 @media (max-width: 520px) {
@@ -1239,6 +1264,8 @@ body.is-playing .stage[data-view='cover'] .cover-art { animation: cover-breathe 
 
 /* อันดับ: ตัวเลขช่องแรก · 3 อันดับแรกสีเด่น */
 .song.is-ranked { grid-template-columns: 24px 64px minmax(0, 1fr) auto; }
+/* .song ตั้ง display:grid ไว้ ซึ่งชนะ attribute hidden → ต้องสั่งซ่อนเองไม่งั้นอันดับ 11–50 โผล่ตลอด */
+.song[hidden] { display: none; }
 .rank {
   font-family: var(--font-display);
   font-weight: 600;
@@ -1270,3 +1297,24 @@ body.is-playing .stage[data-view='cover'] .cover-art { animation: cover-breathe 
 }
 @keyframes skeleton { to { background-position: -150% 0; } }
 @media (prefers-reduced-motion: reduce) { .song.is-skeleton { animation: none; } }
+
+/* ---------- จอ MV บนเวที 3D ----------
+   ตัวเล่น YouTube ตัวเดิมถูกยกไปวางทับจอเวที (app.js placeStageMv ตั้ง transform ให้ทุกครั้งที่กล้องขยับ)
+   ขนาดคงที่ 640×360 แล้วให้ matrix3d บิดลงมุมจอ · ไม่รับคลิก (คลิกต้องทะลุไปเดินในลาน) */
+.screen.is-on-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 26; /* เหนือหน้าเกม (.game = 25) */
+  width: 640px;
+  height: 360px;
+  aspect-ratio: auto;
+  transform-origin: 0 0;
+  border-radius: 0;
+  box-shadow: none;
+  pointer-events: none;
+}
+/* บนเวทีโชว์แค่วิดีโอ — ปก/เนื้อเพลง/ป้ายว่างของโหมดจอปกติไม่ตามมา */
+.screen.is-on-stage > :not(iframe) { visibility: hidden; }
+/* มินิเกม: ถ่างสองนิ้วต้องซูมลาน ไม่ใช่ซูมหน้าเว็บ */
+.game .lounge-view { touch-action: none; }

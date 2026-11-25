@@ -1,7 +1,7 @@
 // หน้าเนื้อเพลงแบบ Spotify: บรรทัดที่ร้องอยู่สว่าง จอเลื่อนตามเอง กดบรรทัดไหนห้องกระโดดไปตรงนั้น
 // เวลาอ่านจากตัวเล่นของเครื่องนี้ (ไม่ใช่เวลาห้อง) เพราะคือเสียงที่หูได้ยินจริง
 // วาดด้วย requestAnimationFrame เฉพาะตอนเปิดหน้านี้ — ปิดอยู่ไม่กินแบต
-import { activeIndex, clampOffset, formatOffset, OFFSET_STEP, withOffset } from './lyrics-core.js';
+import { activeIndex, clampOffset, formatOffset, isMostlyThai, OFFSET_STEP, withOffset } from './lyrics-core.js';
 
 const OFFSET_KEY = 'listen-together:lyrics-offset';
 const USER_SCROLL_PAUSE_MS = 5000; // ผู้ใช้เลื่อนเอง → หยุดเลื่อนตามชั่วคราว (ไม่แย่งจอขณะกำลังอ่าน)
@@ -29,6 +29,23 @@ function saveOffsets(offsets) {
   }
 }
 
+// เปิดคำแปลไว้เป็นค่าเริ่มต้น · กดปิดแล้วจำไว้ในเครื่องนี้
+const TH_KEY = 'listen-together:lyrics-th';
+function loadShowTh() {
+  try {
+    return localStorage.getItem(TH_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+function saveShowTh(on) {
+  try {
+    localStorage.setItem(TH_KEY, on ? '1' : '0');
+  } catch {
+    // จำไม่ได้ก็แค่กลับเป็นค่าเริ่มต้น (เปิด)
+  }
+}
+
 function noteIcon() {
   const wrap = document.createElement('span');
   wrap.className = 'lyric-gap';
@@ -42,7 +59,12 @@ export function createLyrics({ getTime, getDuration, onSeek, canSeek }) {
   const status = $('lyrics-status');
   const followBtn = $('lyrics-follow');
   const offsetLabel = $('lyrics-offset');
+  const thBtn = $('lyrics-th');
   const cache = new Map(); // videoId → ผลจาก server (null = ไม่มีเนื้อ)
+  const thCache = new Map(); // videoId → คำแปลรายบรรทัด (null = แปลไม่ได้/ไม่ต้องแปล)
+  let showTh = loadShowTh();
+  let shownTexts = null; // ข้อความต้นฉบับรายบรรทัดที่วาดอยู่ (ไว้รู้ว่าเพลงนี้แปลได้ไหม)
+  let thFor = null; // videoId ที่กำลังขอคำแปลอยู่ (กันยิงซ้ำ)
 
   let item = null;
   let songAt = 0;
@@ -76,6 +98,8 @@ export function createLyrics({ getTime, getDuration, onSeek, canSeek }) {
     list.replaceChildren();
     list.classList.remove('is-plain');
     followBtn.hidden = true;
+    shownTexts = null;
+    thBtn.hidden = true;
     setStatus(text);
     renderOffset();
   }
@@ -117,12 +141,72 @@ export function createLyrics({ getTime, getDuration, onSeek, canSeek }) {
     renderOffset();
   }
 
+  // ---------- คำแปลไทย ----------
+  // ช่องใส่คำแปลของแต่ละบรรทัด: แบบซิงค์ = ในปุ่มบรรทัด · แบบธรรมดา = ใน <li>
+  const thHosts = () => (nodes.length ? nodes.map((li) => li.firstChild) : [...list.children]);
+
+  function clearTranslation() {
+    for (const span of list.querySelectorAll('.lyric-th')) span.remove();
+  }
+
+  function paintTranslation(lines) {
+    clearTranslation();
+    if (!showTh || !lines) return;
+    thHosts().forEach((host, i) => {
+      // คำแปลเหมือนต้นฉบับ (ชื่อเฉพาะ/คำอุทาน) → ไม่ต้องซ้ำ
+      if (!lines[i] || lines[i] === shownTexts?.[i]?.trim()) return;
+      const span = document.createElement('span');
+      span.className = 'lyric-th';
+      span.lang = 'th';
+      span.textContent = lines[i];
+      host.append(span);
+    });
+    shown = -2; // ความสูงบรรทัดเปลี่ยน → เลื่อนจอให้บรรทัดที่ร้องอยู่ตรงตำแหน่งเดิม
+  }
+
+  async function loadTranslation(target) {
+    if (thFor === target.videoId) return;
+    thFor = target.videoId;
+    const params = new URLSearchParams({
+      v: target.videoId,
+      title: target.title,
+      channel: target.channel ?? '',
+      d: String(Math.round(getDuration() || 0)),
+    });
+    let lines = null;
+    let failed = false;
+    try {
+      const res = await fetch(`/api/lyrics/th?${params}`);
+      if (res.ok) lines = (await res.json()).lines ?? null;
+      else failed = true;
+    } catch {
+      failed = true;
+    }
+    if (thFor === target.videoId) thFor = null;
+    if (item?.videoId !== target.videoId) return; // เปลี่ยนเพลงไปแล้ว
+    if (!failed) thCache.set(target.videoId, lines); // พังชั่วคราว → ไม่จำ กดปุ่มใหม่ลองอีกได้
+    if (!lines) thBtn.hidden = true; // แปลไม่ได้/ไม่ต้องแปล → ซ่อนปุ่มไปเลย ไม่ให้กดแล้วเงียบ
+    paintTranslation(lines);
+  }
+
+  // เรียกหลังวาดเนื้อเพลงใหม่ทุกครั้ง · โชว์ปุ่มเฉพาะเพลงต่างประเทศ · เปิดอยู่ค่อยขอคำแปล
+  function syncTranslation() {
+    const foreign = Boolean(item && shownTexts?.length && !isMostlyThai(shownTexts));
+    thBtn.hidden = !foreign || thCache.get(item?.videoId) === null;
+    thBtn.setAttribute('aria-pressed', String(showTh));
+    if (!foreign || !showTh) return clearTranslation();
+    if (thCache.has(item.videoId)) return paintTranslation(thCache.get(item.videoId));
+    loadTranslation(item);
+  }
+
   function show(result) {
     list.classList.remove('is-plain');
     if (result?.synced?.length) renderSynced(result.synced);
     else if (result?.plain) renderPlain(result.plain);
     else clear('ไม่พบเนื้อเพลงนี้');
+    shownTexts = result?.synced?.length ? result.synced.map((l) => l.text) : result?.plain ? result.plain.split(/\r?\n/) : null;
     scroller.scrollTop = 0;
+    syncTranslation();
   }
 
   async function load() {
@@ -226,6 +310,11 @@ export function createLyrics({ getTime, getDuration, onSeek, canSeek }) {
     userScrollAt = -Infinity;
     followBtn.hidden = true;
     scrollToLine(Math.max(0, shown));
+  });
+  thBtn.addEventListener('click', () => {
+    showTh = !showTh;
+    saveShowTh(showTh);
+    syncTranslation();
   });
   $('lyrics-earlier').addEventListener('click', () => shiftOffset(-OFFSET_STEP));
   $('lyrics-later').addEventListener('click', () => shiftOffset(OFFSET_STEP));

@@ -55,6 +55,7 @@
     <!-- จอบนเวที (MV / ปกเพลง / เนื้อเพลง) + กันจอดับ -->
     <symbol id="i-video" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path fill="currentColor" stroke="none" d="M10 9.4v5.2a.6.6 0 0 0 .9.5l4.2-2.6a.6.6 0 0 0 0-1l-4.2-2.6a.6.6 0 0 0-.9.5z"/></g></symbol>
     <symbol id="i-disc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/></g></symbol>
+    <symbol id="i-translate" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></g></symbol>
     <symbol id="i-lyrics" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6.5h11M4 11.5h8M4 16.5h6"/><path d="M17 17.5V9l3.5-1"/><circle cx="15.3" cy="17.5" r="1.8"/></g></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.8"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></g></symbol>
     <symbol id="i-minus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 12h12"/></symbol>
@@ -130,7 +131,10 @@
                   <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
                 </button>
               </div>
-              <span class="lyrics-credit">เนื้อเพลงจาก LRCLIB</span>
+              <button type="button" class="lyrics-th" id="lyrics-th" aria-pressed="true" title="แสดงคำแปลไทยใต้เนื้อเพลง" hidden>
+                <svg class="icon" aria-hidden="true"><use href="#i-translate"/></svg>แปลไทย
+              </button>
+              <span class="lyrics-credit">เนื้อเพลงจาก LRCLIB · คำแปลจาก Google</span>
             </div>
           </section>
         </div>
@@ -209,7 +213,7 @@
         <div class="lounge-view" id="lounge" tabindex="0" aria-label="ห้อง 3D — คลิกพื้นเพื่อเดิน คลิกโซฟาเพื่อนั่ง ลูกศรหรือ WASD เดิน กด Shift ค้างเพื่อวิ่ง Space กระโดด F ต่อย E นั่ง G วางของ">
           <canvas></canvas>
           <div class="lounge-layer" aria-hidden="true"></div>
-          <p class="lounge-help">แตะพื้นเพื่อเดิน · เดินทับของเพื่อเก็บ<span class="lounge-keys"> · WASD/ลูกศร เดิน · Shift วิ่ง · Space กระโดด · F ต่อย · E นั่ง · G วางของ</span></p>
+          <p class="lounge-help">แตะพื้นเพื่อเดิน · เดินทับของเพื่อเก็บ · ยืนบนพรมแดงตอนเพลงเล่นจะเต้นเอง · ถ่างนิ้ว/ล้อเมาส์ = ซูม<span class="lounge-keys"> · WASD/ลูกศร เดิน · Shift วิ่ง · Space กระโดด · F ต่อย · E นั่ง · G วางของ · +/− ซูม</span></p>
         </div>
         <div class="lounge-bar">
           <div class="lounge-actions" role="toolbar" aria-label="ท่าทาง">
@@ -226,6 +230,10 @@
               <button type="button" class="emo" data-gesture="clap" aria-label="ปรบมือ"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg></button>
               <button type="button" class="emo" data-gesture="cry" aria-label="ร้องไห้"><svg class="icon" aria-hidden="true"><use href="#i-sad"/></svg></button>
               <button type="button" class="emo" data-gesture="angry" aria-label="โกรธ"><svg class="icon" aria-hidden="true"><use href="#i-angry"/></svg></button>
+            </span>
+            <span class="lounge-zoom" role="group" aria-label="ซูมกล้อง">
+              <button type="button" class="icon-btn" data-zoom="out" aria-label="ถอยกล้องออก" title="ถอยกล้องออก (−)"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+              <button type="button" class="icon-btn" data-zoom="in" aria-label="ซูมเข้าใกล้" title="ซูมเข้าใกล้ (+)"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
             </span>
             <button type="button" class="icon-btn reroll" id="reroll" aria-label="สุ่มตัวละครใหม่" title="สุ่มตัวละครใหม่">
               <svg class="icon" aria-hidden="true"><use href="#i-dice"/></svg>

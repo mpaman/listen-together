@@ -25,7 +25,7 @@ export function createRoomState(now) {
     position: 0,
     refTime: now,
     finished: false,
-    whenEmpty: 'similar',
+    whenEmpty: 'loop', // Man ขอ 2026-11-26: ไม่อยากให้ต่อเพลงเองอัตโนมัติ · อยากได้ก็กด "แนวเดียวกัน" เอง
     host: null, // { socketId, name } ตอนมีคนเป็น host
     version: 0,
   };
@@ -71,10 +71,29 @@ export function needsAutofill(state) {
 
 // ต่อท้ายคิวหลายเพลง (เติมอัตโนมัติ / เพิ่มทั้ง playlist) · คิวเต็มก็รับเท่าที่ใส่ได้
 // ยังไม่มีเพลงเล่น หรือคิวจบไปแล้ว → เริ่มเล่นเพลงแรกที่เพิ่งเพิ่ม
+// videoId ของเพลงที่กำลังเล่น + ที่ยังรอเล่น · เพลงที่เล่นผ่านไปแล้วไม่นับ เพราะคนอาจอยากฟังซ้ำจริงๆ
+// คิวจบแล้ว = ทุกเพลงเล่นผ่านหมด → ไม่มีอะไรนับว่าซ้ำ
+function upcomingVideoIds(state) {
+  if (state.finished) return new Set();
+  const from = Math.max(0, indexOfCurrent(state));
+  return new Set(state.queue.slice(from).map((item) => item.videoId));
+}
+
+// ตัดเพลงที่ซ้ำกับคิวรอเล่น และซ้ำกันเองในชุดเดียวกัน (กดเพิ่มสองครั้ง / playlist มีเพลงซ้ำ)
+function withoutUpcoming(state, items) {
+  const seen = upcomingVideoIds(state);
+  return items.filter((item) => {
+    if (seen.has(item.videoId)) return false;
+    seen.add(item.videoId);
+    return true;
+  });
+}
+
 function appendItems(state, items, now) {
   const room = MAX_QUEUE - state.queue.length;
   if (room <= 0 || items.length === 0) return state;
-  const added = items.slice(0, room);
+  const added = withoutUpcoming(state, items).slice(0, room);
+  if (added.length === 0) return state;
   const next = { ...state, queue: [...state.queue, ...added] };
   return state.currentId === null || state.finished ? startItem(next, added[0].id, now) : next;
 }
@@ -88,7 +107,7 @@ function goPrev(state, now) {
 }
 
 function addItem(state, item, now) {
-  if (state.queue.length >= MAX_QUEUE) return state;
+  if (state.queue.length >= MAX_QUEUE || upcomingVideoIds(state).has(item.videoId)) return state;
   const queue = [...state.queue, item];
   // ยังไม่เคยเล่น หรือเล่นจบคิวไปแล้ว → เพลงที่เพิ่งเพิ่มเล่นต่อเลย
   if (state.currentId === null || state.finished) return startItem({ ...state, queue }, item.id, now);

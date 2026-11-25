@@ -16,14 +16,33 @@ const MAX_LINES = 400;
 
 const TOPIC_RE = /\s*-\s*Topic$/i;
 const TIMESTAMP_RE = /\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]/g;
+// LRCLIB ค้นแบบ "ต้องเจอทุกคำ" → คำเกินมาคำเดียวก็ได้ 0 ผล (ลองจริง 2026-11-26: "ปลายทาง Visualizer" = 0, "ปลายทาง" = 11)
+// cleanTitle ล้างคำพวก official/mv ไปแล้ว ที่นี่ล้างเพิ่มเฉพาะคำที่ทำให้ค้นเนื้อพลาด (ไม่แตะ cleanTitle เพราะใช้กับ dedupe ด้วย)
+const LYRIC_NOISE_RE = /\b(?:m\/v|visuali[sz]er|teaser|performance|special clip)\b/gi;
+// "feat. X" / "ft. X" ไปจนจบท่อน — ศิลปินรับเชิญมักไม่อยู่ในชื่อเพลงของ LRCLIB
+const FEAT_RE = /\s(?:feat\.?|ft\.?)\s[^-–|]*/gi;
+const PART_SPLIT_RE = /\s[-–|]\s/;
+const MAX_QUERIES = 3;
 
-// คำค้น: ช่อง "<ศิลปิน> - Topic" ของ YouTube Music ชื่อเพลงมักไม่มีศิลปิน → ต่อชื่อศิลปินเข้าไป
+const tidy = (s) => s.replace(/\s+/g, ' ').replace(/^[\s\-–|]+|[\s\-–|]+$/g, '').trim();
+const songOnly = (title) => tidy(cleanTitle(title).replace(LYRIC_NOISE_RE, ' ').replace(FEAT_RE, ' '));
+
+// คำค้นหลัก: ช่อง "<ศิลปิน> - Topic" ของ YouTube Music ชื่อเพลงมักไม่มีศิลปิน → ต่อชื่อศิลปินเข้าไป
 // ช่องอื่น (ค่าย/คนอัปโหลด) ชื่อคลิปมักมีศิลปินอยู่แล้ว ส่วนชื่อช่องมักไม่ใช่ศิลปิน → ใช้แค่ชื่อเพลงที่ล้างแล้ว
 export function lyricsQuery(title, channel) {
-  const song = cleanTitle(title);
+  const song = songOnly(title);
   const ch = String(channel ?? '');
   if (TOPIC_RE.test(ch)) return `${song} ${ch.replace(TOPIC_RE, '').trim()}`.trim();
   return song;
+}
+
+// คำค้นสำรองเรียงตามลำดับที่ลอง: คำหลัก → แต่ละท่อนของ "ศิลปิน - เพลง" → ชื่อเพลงล้วน
+// ใช้ตอนคำหลักไม่เจอ เช่น LRCLIB สะกดชื่อศิลปินคนละแบบ ("บอดี้สแลม") หรือชื่อคลิปมีท่อนเกิน
+export function lyricsQueries(title, channel) {
+  const song = songOnly(title);
+  const parts = song.split(PART_SPLIT_RE).map(tidy).filter(Boolean);
+  const all = [lyricsQuery(title, channel), ...(parts.length > 1 ? parts : []), song].filter(Boolean);
+  return [...new Set(all)].slice(0, MAX_QUERIES);
 }
 
 // "[00:14.60][01:20.10] ข้อความ" → [{ t: 14.6, text }, { t: 80.1, text }] เรียงตามเวลา
@@ -78,15 +97,7 @@ function writeCache(key, value, now) {
 }
 
 // คืน { synced, plain, track, artist } หรือ null (หาไม่เจอ — cache ผล null ด้วย กันยิงซ้ำเพลงที่ไม่มีเนื้อ)
-export async function findLyrics({ videoId, title, channel, duration }, fetchImpl = fetch) {
-  const query = lyricsQuery(title, channel);
-  if (!query) return null;
-  // ความยาวปัดเป็นช่วง 10 วิ ให้ทุกเครื่องในห้องได้ key เดียวกัน (แต่ละเครื่องอ่าน duration ต่างกันเศษวินาที)
-  const key = `${videoId}:${Math.round(duration / 10)}`;
-  const now = Date.now();
-  const cached = readCache(key, now);
-  if (cached !== undefined) return cached;
-
+async function searchLrclib(query, fetchImpl) {
   const res = await fetchImpl(`${LRCLIB_URL}?${new URLSearchParams({ q: query })}`, {
     headers: { 'User-Agent': USER_AGENT },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -96,7 +107,24 @@ export async function findLyrics({ videoId, title, channel, duration }, fetchImp
     err.status = res.status;
     throw err; // พังชั่วคราว → ไม่ cache จะได้ลองใหม่ได้
   }
-  const value = pickLyrics(await res.json(), duration);
+  return res.json();
+}
+
+export async function findLyrics({ videoId, title, channel, duration }, fetchImpl = fetch) {
+  const queries = lyricsQueries(title, channel);
+  if (!queries.length) return null;
+  // ความยาวปัดเป็นช่วง 10 วิ ให้ทุกเครื่องในห้องได้ key เดียวกัน (แต่ละเครื่องอ่าน duration ต่างกันเศษวินาที)
+  const key = `${videoId}:${Math.round(duration / 10)}`;
+  const now = Date.now();
+  const cached = readCache(key, now);
+  if (cached !== undefined) return cached;
+
+  // ลองทีละคำค้น หยุดที่อันแรกที่ได้เนื้อ · ไม่เจอเลยก็ cache null (ยิงมากสุด MAX_QUERIES ครั้งต่อเพลงต่อ 6 ชม.)
+  let value = null;
+  for (const query of queries) {
+    value = pickLyrics(await searchLrclib(query, fetchImpl), duration);
+    if (value) break;
+  }
   writeCache(key, value, now);
   return value;
 }

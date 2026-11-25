@@ -207,7 +207,8 @@ export function createAvatar(look) {
 
   // speed = ความเร็วเทียบกับเดินปกติ (1 = เดิน, ~1.7 = วิ่ง) · seated = นั่งอยู่ไหม
   // ทุกเฟรมคืนท่าเริ่มต้นก่อน แล้วค่อยใส่ท่า
-  function update(dt, { speed = 0, seated = false } = {}) {
+  // groove = ตำแหน่งในจังหวะเพลง 0..1 (ทุกคนในฟลอร์ใช้ค่าเดียวกันจากนาฬิกาเครื่อง → โยกพร้อมกัน) · null = ไม่โยก
+  function update(dt, { speed = 0, seated = false, groove = null } = {}) {
     clock += dt;
     sitK += ((seated ? 1 : 0) - sitK) * (1 - Math.exp(-dt * 9));
     if (Math.abs(sitK - (seated ? 1 : 0)) < 0.002) sitK = seated ? 1 : 0;
@@ -248,6 +249,19 @@ export function createAvatar(look) {
         blinkT = -1;
         blinkIn = 2 + Math.random() * 4;
       }
+    }
+
+    // โยกบนฟลอร์: ย่อเข่าลงตามบีต + ไหล่เอียงสลับซ้ายขวาทุก 2 บีต + แขนแกว่ง · กดท่าอื่นเมื่อไหร่ ท่านั้นทับ
+    if (groove !== null && !gesture && idle > 0.5) {
+      const bounce = Math.abs(Math.sin(groove * Math.PI));
+      const side = Math.sin(groove * Math.PI); // บวก/ลบสลับทุกบีต (groove นับต่อเนื่องเกิน 1 ได้)
+      body.position.y += bounce * 0.09 * idle;
+      body.rotation.z = side * 0.09 * idle;
+      body.rotation.y += side * 0.18 * idle;
+      parts.legL.rotation.x = parts.legR.rotation.x = -bounce * 0.18 * idle;
+      parts.armL.rotation.set(-0.5 - bounce * 0.4, 0, -0.25 - side * 0.15);
+      parts.armR.rotation.set(-0.5 - bounce * 0.4, 0, 0.25 - side * 0.15);
+      parts.head.rotation.x = bounce * 0.12;
     }
 
     if (!gesture) return;

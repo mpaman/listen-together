@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
 import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
-import { buildWorld, HALF_X, HALF_Z, pushOutOfBlocks, SEATS } from './lounge-world.js';
+import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
 
 const WALK_SPEED = 3;
 const RUN_SPEED = 5.2; // กด Shift ค้าง
@@ -22,6 +22,16 @@ const PICK_DIST = 1; // เดินเข้าใกล้ของเท่�
 const PICK_RETRY_MS = 800; // server ปฏิเสธ (อีกคนเก็บไปก่อน) → ไม่ส่งซ้ำรัวๆ
 const PIXEL_HEIGHT = 300; // เรนเดอร์สูงแค่นี้พิกเซลแล้วขยาย = ภาพแตกเป็นพิกเซลแบบเกม 8-bit
 const SKY = 0x2b2747;
+// จังหวะไฟ/ลำโพง/โยกตัว: YouTube ไม่ให้อ่านเสียงจริง → ใช้จังหวะคงที่ 120 BPM (เพลงป็อปส่วนใหญ่อยู่แถวนี้)
+// นับจากนาฬิกาเครื่อง ทุกตัวในฟลอร์จึงโยกพร้อมกัน แต่ไม่ได้ตรงบีตเพลงเป๊ะ
+const BEAT_MS = 500;
+// ซูมกล้อง: 1 = ระยะเดิม · น้อย = ใกล้ · มาก = ถอยเห็นทั้งลาน
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 1.15;
+const LOOK_AHEAD = 1.5;
+// จอ MV บนเวที (16:9 กลางจอตัวหนังสือ) — ต้องอยู่ในกรอบ PlaneGeometry ของ buildScreen (7.2 × 1.8)
+const MV = { halfW: 1.6, y0: 1.1, y1: 2.9, z: -6.24 };
 
 export const EMOTES = { wave: '👋', dance: '💃', laugh: '😂', love: '❤️', party: '🎉', cry: '😢', clap: '👏', angry: '😡', hit: '💫' };
 
@@ -47,8 +57,10 @@ function buildScreen(scene) {
   screen.position.set(0, 2.0, -6.26);
   scene.add(screen);
 
-  function draw(title, isPlaying) {
+  // mv = มีวิดีโอวางทับกลางจออยู่ → ตัวหนังสือจะโดนบัง เลยวาดแถบ EQ สองข้างแทน (beat = ตำแหน่งจังหวะ)
+  function draw(title, isPlaying, mv = false, beat = 0) {
     const ctx = canvas.getContext('2d');
+    if (mv) return drawEq(ctx, isPlaying, beat);
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = isPlaying ? '#262b44' : '#181425';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -65,6 +77,22 @@ function buildScreen(scene) {
     let text = title ?? 'ค้นเพลงแล้วกด + เพื่อเริ่ม';
     while (ctx.measureText(text).width > canvas.width - 32 && text.length > 1) text = `${text.slice(0, -2)}…`;
     ctx.fillText(text, 16, 62);
+    texture.needsUpdate = true;
+  }
+  // แท่ง EQ แบบพิกเซล ซ้าย 1 ชุด ขวา 1 ชุด (กลางจอ = ที่ของวิดีโอ ปล่อยมืดไว้)
+  function drawEq(ctx, isPlaying, beat) {
+    ctx.fillStyle = '#181425';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const side = Math.floor((canvas.width * (1 - (MV.halfW * 2) / 7.2)) / 2) - 8;
+    const bar = Math.floor(side / 8);
+    for (const x0 of [6, canvas.width - side - 2]) {
+      for (let i = 0; i < 8; i += 1) {
+        const level = isPlaying ? 0.35 + 0.65 * Math.abs(Math.sin(beat * Math.PI * (0.5 + i * 0.13) + i)) : 0.08;
+        const h = Math.max(4, Math.round(((canvas.height - 16) * level) / 4) * 4);
+        ctx.fillStyle = i % 3 === 0 ? '#2ce8f5' : '#22c55e';
+        ctx.fillRect(x0 + i * bar, canvas.height - 8 - h, bar - 3, h);
+      }
+    }
     texture.needsUpdate = true;
   }
   draw(null, false);
@@ -107,7 +135,7 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
@@ -125,9 +153,14 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 });
   scene.add(sun, sun.target);
 
-  const { floor, seatHits, speakers, blocks } = buildWorld(scene);
+  const { floor, seatHits, speakers, blocks, floorLights } = buildWorld(scene);
   const drawScreen = buildScreen(scene);
   let music = false;
+  let screenTitle = null;
+  let mvOn = false; // ตัวเล่น YouTube วางทับจอเวทีอยู่ไหม (app.js บอกผ่าน setMv)
+  let lastEqAt = 0;
+  let zoom = 1;
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
   const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed, vel, lastDrop }
   let myId = null;
@@ -459,10 +492,12 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
   function placeCamera() {
     // จอแคบ (มือถือ) → ถอยกล้องให้เห็นรอบตัวกว้างขึ้น
-    const far = camera.aspect < 1 ? 1.45 : 1;
+    const far = (camera.aspect < 1 ? 1.45 : 1) * zoom;
     camOffset.set(0, 12 * far, 8.5 * far); // มุมก้มชัน (~55°) → ต้นไม้บังตัวละครน้อย
+    // มองเลยตัวละครไปทางเวทีนิดนึง (ตัวละครอยู่ต่ำกว่ากลางจอ) → จอ MV ไม่หลุดขอบบนง่ายตอนยืนบนฟลอร์/ซูมเข้า
     camera.position.copy(focus).add(camOffset);
-    camera.lookAt(focus.x, 0.6, focus.z);
+    camera.position.z -= LOOK_AHEAD;
+    camera.lookAt(focus.x, 0.6, focus.z - LOOK_AHEAD);
     sun.position.set(focus.x + 8, 18, focus.z + 10);
     sun.target.position.set(focus.x, 0, focus.z);
   }
@@ -514,11 +549,65 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (!onScreen) keys.clear();
   }, { threshold: [0, 0.5] }).observe(container);
 
+  // ---------- เพลงเล่น → ฟลอร์ ลำโพง จอ ขยับตามจังหวะ ----------
+  let beats = 0; // จำนวนบีตนับต่อเนื่อง (ทศนิยม = ระหว่างบีต)
+  let moving = false; // เพลงเล่นอยู่ และผู้ใช้ไม่ได้ขอลดการเคลื่อนไหว
+  function animateMusic(now) {
+    // เครื่องที่ตั้ง "ลดการเคลื่อนไหว" (Windows ปิด animation effects ก็นับ) → ตัวละครยังโยกได้ (Man ขอฟีเจอร์นี้ตรงๆ)
+    // แต่ไฟฟลอร์เป็นคลื่นช้าๆ ไม่เปลี่ยนสีทุกบีต และลำโพงไม่เด้ง = ไม่มีอะไรกะพริบ
+    const calm = reducedMotion.matches;
+    moving = music && !calm;
+    beats = now / BEAT_MS;
+    const phase = beats % 1;
+    if (!music) floorLights(0, 0, 0);
+    else if (calm) floorLights(0.8, 0, (beats / 8) % 1);
+    else floorLights(1, Math.floor(beats), phase);
+    const kick = moving ? Math.max(0, 1 - phase * 3) : 0; // กระแทกต้นบีตแล้วค่อยคืน
+    for (const { cone, box } of speakers) {
+      cone.scale.set(1 + kick * 0.3, 1 + kick * 0.3, 1);
+      box.scale.set(1 + kick * 0.03, 1 - kick * 0.04, 1 + kick * 0.03);
+    }
+    if (mvOn && now - lastEqAt > 100) { // EQ บนจอวาดใหม่ ~10 ครั้ง/วิ พอ (วาด canvas ทุกเฟรมเปลือง)
+      lastEqAt = now;
+      drawScreen(screenTitle, moving, true, beats);
+    }
+  }
+
+  // ---------- มุมจอ MV บนหน้าจอ (px ในกรอบลาน) → app.js วางตัวเล่น YouTube ทับ ----------
+  // ลำดับมุม: ซ้ายบน ขวาบน ขวาล่าง ซ้ายล่าง (ตรงกับมุมของ element วิดีโอ)
+  const mvCorners = [
+    new THREE.Vector3(-MV.halfW, MV.y1, MV.z),
+    new THREE.Vector3(MV.halfW, MV.y1, MV.z),
+    new THREE.Vector3(MV.halfW, MV.y0, MV.z),
+    new THREE.Vector3(-MV.halfW, MV.y0, MV.z),
+  ];
+  const projected = new THREE.Vector3();
+  let lastQuadKey = null;
+  function emitQuad(quad) {
+    const key = quad ? quad.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ') : '';
+    if (key === lastQuadKey) return; // กล้องนิ่ง = ไม่ต้องแตะ DOM
+    lastQuadKey = key;
+    onScreenQuad(quad, container.clientWidth, container.clientHeight);
+  }
+  function reportScreen() {
+    if (!onScreenQuad) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    const quad = [];
+    for (const c of mvCorners) {
+      projected.copy(c).project(camera);
+      if (projected.z >= 1) return emitQuad(null); // อยู่หลังกล้อง
+      quad.push([((projected.x + 1) / 2) * w, ((1 - projected.y) / 2) * h]);
+    }
+    emitQuad(quad);
+  }
+
   let last = performance.now();
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    animateMusic(now);
     updateMe(dt);
     sendPose(now);
     checkPickup(now);
@@ -529,16 +618,52 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
       entry.av.root.position.set(entry.pos.x, (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z);
       entry.av.root.rotation.y = entry.ry;
-      entry.av.update(dt, { speed: entry.speed, seated });
+      // ยืนนิ่งบนฟลอร์ตอนเพลงเล่น → โยกตามจังหวะ (ทุกเครื่องคิดเองจากตำแหน่ง ไม่ต้องส่งผ่าน server)
+      const groove = music && !seated && entry.speed < 0.15 && onDanceFloor(entry.pos.x, entry.pos.z) ? beats : null;
+      entry.dancing = groove !== null;
+      entry.av.update(dt, { speed: entry.speed, seated, groove });
     }
     animateGround(now);
-    const beat = music ? 1 + Math.abs(Math.sin(now / 160)) * 0.15 : 1;
-    for (const cone of speakers) cone.scale.set(beat, beat, 1);
     followCamera(dt);
     renderer.render(scene, camera);
     placeTags(container.clientWidth, container.clientHeight);
+    reportScreen();
   }
   requestAnimationFrame(frame);
+
+  // ---------- ซูม: ล้อเมาส์ / ถ่างสองนิ้ว / ปุ่ม + − ----------
+  function setZoom(next) {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+    placeCamera();
+  }
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault(); // ไม่งั้นหน้าเว็บเลื่อนไปด้วย
+    setZoom(zoom * Math.exp(e.deltaY * 0.0012));
+  }, { passive: false });
+  const touches = new Map(); // pointerId → {x, y}
+  let pinchFrom = null; // { dist, zoom } ตอนเริ่มถ่างนิ้ว
+  const pinchDist = () => {
+    const [a, b] = [...touches.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) pinchFrom = { dist: pinchDist(), zoom };
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinchFrom && touches.size === 2) {
+      downAt = null; // กำลังถ่างนิ้ว → ปล่อยนิ้วแล้วอย่านับเป็นแตะเพื่อเดิน
+      setZoom(pinchFrom.zoom * (pinchFrom.dist / Math.max(1, pinchDist())));
+    }
+  });
+  const endTouch = (e) => {
+    touches.delete(e.pointerId);
+    if (touches.size < 2) pinchFrom = null;
+  };
+  canvas.addEventListener('pointerup', endTouch);
+  canvas.addEventListener('pointercancel', endTouch);
 
   // ---------- input: แตะพื้น = เดิน · แตะที่นั่ง = ไปนั่ง ----------
   const raycaster = new THREE.Raycaster();
@@ -566,7 +691,18 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   // ---------- คีย์บอร์ด: รับทั้งหน้าเว็บ ไม่ต้องคลิกที่ลานก่อน ----------
   // ยกเว้น: กำลังพิมพ์ / โฟกัสอยู่ที่ตัวควบคุมที่ใช้ปุ่มเหล่านี้เอง
   const MOVE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS']);
-  const ACTION_KEYS = { Space: () => gesture('jump'), KeyF: () => gesture('punch'), KeyE: toggleSit, KeyG: dropHeld };
+  const zoomIn = () => setZoom(zoom / ZOOM_STEP);
+  const zoomOut = () => setZoom(zoom * ZOOM_STEP);
+  const ACTION_KEYS = {
+    Space: () => gesture('jump'),
+    KeyF: () => gesture('punch'),
+    KeyE: toggleSit,
+    KeyG: dropHeld,
+    Equal: zoomIn, // ปุ่ม = / + ข้าง backspace
+    NumpadAdd: zoomIn,
+    Minus: zoomOut,
+    NumpadSubtract: zoomOut,
+  };
   const isTyping = (t) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   const ownsArrows = (t) => t instanceof HTMLElement && Boolean(t.closest('[role="tablist"], [role="radiogroup"]'));
   const isButton = (t) => t instanceof HTMLElement && /^(BUTTON|A|SUMMARY)$/.test(t.tagName);
@@ -605,7 +741,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   return {
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
-    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held() })),
+    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
     debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
     reset(list, you, items = []) {
@@ -646,7 +782,17 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     },
     setScreen(title, isPlaying) {
       music = isPlaying;
-      drawScreen(title, isPlaying);
+      screenTitle = title;
+      drawScreen(title, isPlaying, mvOn, beats);
+    },
+    // app.js วาง/เอาตัวเล่น YouTube ออกจากจอเวที → สลับจอระหว่างแบบตัวหนังสือกับแบบ EQ ข้างวิดีโอ
+    setMv(on) {
+      if (mvOn === on) return;
+      mvOn = on;
+      drawScreen(screenTitle, music, on, beats);
+    },
+    zoomBy(step) {
+      setZoom(zoom * step);
     },
   };
 }

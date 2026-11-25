@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeIndex, clampOffset, formatOffset, withOffset } from '../public/lyrics-core.js';
+import { activeIndex, clampOffset, formatOffset, isMostlyThai, withOffset } from '../public/lyrics-core.js';
 
 const lines = [{ t: 10 }, { t: 15 }, { t: 15 }, { t: 30 }];
 
@@ -42,4 +42,10 @@ test('formatOffset: ข้อความบนปุ่มปรับเวล
   assert.equal(formatOffset(0), 'ตรงเวลา');
   assert.equal(formatOffset(1.5), '+1.5 วิ');
   assert.equal(formatOffset(-2), '−2 วิ');
+});
+
+test('isMostlyThai (เว็บ): ตัดสินโชว์ปุ่มแปลไทย', () => {
+  assert.equal(isMostlyThai(['ปลายทางที่ฉันรอเธอ', 'oh baby']), true);
+  assert.equal(isMostlyThai(['사랑해', 'I love you']), false);
+  assert.equal(isMostlyThai([]), false);
 });

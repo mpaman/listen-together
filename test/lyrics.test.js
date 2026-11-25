@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findLyrics, lyricsQuery, parseLrc, pickLyrics } from '../server/lyrics.js';
+import { findLyrics, lyricsQueries, lyricsQuery, parseLrc, pickLyrics } from '../server/lyrics.js';
 
 const LRC = '[ar:Bodyslam]\n[00:14.60] บรรทัดแรก\n[00:20.00]\n[01:02.5][00:30.25] ท่อนซ้ำ';
 
@@ -61,7 +61,8 @@ test('findLyrics: ส่ง User-Agent + cache ผล (ขอซ้ำไม่�
   const missing = { ...song, videoId: 'bbbbbbbbbb2' };
   assert.equal(await findLyrics(missing, okFetch([], calls)), null);
   assert.equal(await findLyrics(missing, okFetch([row()], calls)), null);
-  assert.equal(calls.length, 2);
+  // ไม่เจอ = ลองคำค้นหลัก + ชื่อเพลงล้วน (2 ครั้ง) แล้ว cache null · ขอซ้ำไม่ยิงเพิ่ม
+  assert.equal(calls.length, 3);
 });
 
 test('findLyrics: LRCLIB ล่ม → โยน error และไม่ cache', async () => {
@@ -76,4 +77,29 @@ test('findLyrics: ชื่อเพลงล้างแล้วว่าง �
   const calls = [];
   assert.equal(await findLyrics({ videoId: 'dddddddddd4', title: '(Official MV)', channel: '', duration: 0 }, okFetch([], calls)), null);
   assert.equal(calls.length, 0);
+});
+
+test('lyricsQuery: ล้างคำที่ทำให้ LRCLIB ค้นพลาด (M/V, Visualizer, feat.)', () => {
+  assert.equal(lyricsQuery('เขียว เหลือง แดง M/V', 'PUN'), 'เขียว เหลือง แดง');
+  assert.equal(lyricsQuery('ปลายทาง Visualizer', 'Bodyslam'), 'ปลายทาง');
+  assert.equal(lyricsQuery('PUN - เขียว เหลือง แดง feat. THE TOYS', 'PUN'), 'PUN - เขียว เหลือง แดง');
+});
+
+test('lyricsQueries: คำหลัก → แต่ละท่อน → ชื่อเพลงล้วน · ไม่ซ้ำ ไม่เกิน 3', () => {
+  assert.deepEqual(lyricsQueries('ปลายทาง', 'Bodyslam - Topic'), ['ปลายทาง Bodyslam', 'ปลายทาง']);
+  assert.deepEqual(lyricsQueries('Bodyslam - ปลายทาง (Official MV)', 'GMM'), ['Bodyslam - ปลายทาง', 'Bodyslam', 'ปลายทาง']);
+  assert.deepEqual(lyricsQueries('ปลายทาง', 'Bodyslam'), ['ปลายทาง']);
+  assert.deepEqual(lyricsQueries('(Official MV)', ''), []);
+});
+
+test('findLyrics: คำหลักไม่เจอ → ลองคำสำรองต่อ หยุดที่อันแรกที่เจอ', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    const q = new URL(url).searchParams.get('q');
+    urls.push(q);
+    return { ok: true, json: async () => (q === 'ปลายทาง' ? [row({ artistName: 'บอดี้สแลม' })] : []) };
+  };
+  const got = await findLyrics({ videoId: 'eeeeeeeeee5', title: 'ปลายทาง', channel: 'Bodyslam - Topic', duration: 251 }, fetchImpl);
+  assert.equal(got.artist, 'บอดี้สแลม');
+  assert.deepEqual(urls, ['ปลายทาง Bodyslam', 'ปลายทาง']);
 });

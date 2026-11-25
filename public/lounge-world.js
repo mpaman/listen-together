@@ -47,6 +47,10 @@ function seeded(seed) {
   };
 }
 
+// ฟลอร์เต้น = พรมแดงกลางเวที (วงกลมรัศมี 3) · ยืนนิ่งบนนี้ตอนเพลงเล่น → ตัวละครโยกตามเพลงเอง
+export const DANCE_FLOOR = { x: 0, z: 0.6, r: 3 };
+export const onDanceFloor = (x, z) => Math.hypot(x - DANCE_FLOOR.x, z - DANCE_FLOOR.z) <= DANCE_FLOOR.r;
+
 const inRect = (x, z, r, pad = 0) => x >= r.x0 - pad && x <= r.x1 + pad && z >= r.z0 - pad && z <= r.z1 + pad;
 const onPath = (x, z) => (Math.abs(x) <= 1.2 && z > STAGE.z1) || (Math.abs(z - 9) <= 1.2 && Math.abs(x) < HALF_X);
 const pick = (list, rand) => list[Math.floor(rand() * list.length)];
@@ -83,7 +87,7 @@ function tileColor(x, z, rand) {
   const cz = z + 0.5;
   if (inRect(cx, cz, POND)) return null; // สระ วาดแยก
   if (inRect(cx, cz, STAGE)) {
-    if (Math.hypot(cx, cz - 0.6) <= 3) return C.rug[(x + z) & 1];
+    if (onDanceFloor(cx, cz)) return C.rug[(x + z) & 1];
     return pick(C.plank, rand);
   }
   if (onPath(cx, cz)) return pick(C.path, rand);
@@ -215,7 +219,7 @@ function buildStage(scene, blocks) {
     g.position.set(side * 5.4, 0, -6);
     scene.add(g);
     blocks.push({ box: true, x: side * 5.4, z: -6, hx: 0.5, hz: 0.4 });
-    return cone;
+    return { cone, box: g };
   });
 
   // โซฟา 2 ตัว (ที่นั่งจริงคือ SEATS — เฟอร์นิเจอร์แค่ให้ดูเป็นที่นั่ง)
@@ -262,14 +266,51 @@ function buildStage(scene, blocks) {
   return { speakers, seatHits };
 }
 
+// ไฟฟลอร์: แผ่นเรืองแสงบางๆ วางทับพรมทีละช่อง (แยกจากพื้นจริง จะได้เปลี่ยนสีทุกเฟรมได้โดยไม่แตะพื้นทั้งลาน)
+// แสงแบบบวก (additive) → พรมสว่างขึ้นเป็นจังหวะ · ปิดเพลง = ดับ
+const FLOOR_COLORS = [0x22c55e, 0x2ce8f5, 0xb55088, 0xfee761]; // เขียว action ของเว็บ + สีจาก ENDESGA
+function buildFloorLights(scene) {
+  const tiles = [];
+  for (let x = -4; x < 4; x += 1) {
+    for (let z = -3; z < 4; z += 1) {
+      if (onDanceFloor(x + 0.5, z + 0.5)) tiles.push({ x: x + 0.5, z: z + 0.5 });
+    }
+  }
+  const mat = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const geo = new THREE.PlaneGeometry(0.92, 0.92);
+  geo.rotateX(-Math.PI / 2);
+  const mesh = new THREE.InstancedMesh(geo, mat, tiles.length);
+  const m = new THREE.Matrix4();
+  tiles.forEach((t, i) => mesh.setMatrixAt(i, m.makeTranslation(t.x, 0.012, t.z)));
+  const color = new THREE.Color();
+  const black = new THREE.Color(0x000000);
+  mesh.renderOrder = 1;
+  scene.add(mesh);
+
+  // level 0..1 = ความแรงของแสง · beat = นับจังหวะ (เลขจำนวนเต็มเปลี่ยนทุกบีต ใช้สลับลายสี)
+  // ลาย: วงคลื่นกระจายจากกลางฟลอร์ + สีเลื่อนไปทีละบีต · ไม่กะพริบดำ-ขาวสุดขั้ว (กันคนแพ้แสงกะพริบ)
+  function update(level, beat, phase) {
+    tiles.forEach((t, i) => {
+      const ring = Math.floor(Math.hypot(t.x - DANCE_FLOOR.x, t.z - DANCE_FLOOR.z));
+      const hue = FLOOR_COLORS[(ring + beat) % FLOOR_COLORS.length];
+      const wave = 0.55 + 0.45 * Math.cos((phase - ring * 0.18) * Math.PI * 2);
+      mesh.setColorAt(i, color.setHex(hue).lerp(black, 1 - level * wave * 0.5));
+    });
+    mesh.instanceColor.needsUpdate = true;
+  }
+  update(0, 0, 0);
+  return update;
+}
+
 export function buildWorld(scene) {
   const rand = seeded(20261105);
   const blocks = [{ box: true, x: (POND.x0 + POND.x1) / 2, z: (POND.z0 + POND.z1) / 2, hx: (POND.x1 - POND.x0) / 2, hz: (POND.z1 - POND.z0) / 2 }];
   const floor = buildGround(scene, rand);
   buildFence(scene);
   const { speakers, seatHits } = buildStage(scene, blocks);
+  const floorLights = buildFloorLights(scene);
   buildNature(scene, rand, blocks);
-  return { floor, speakers, seatHits, blocks };
+  return { floor, speakers, seatHits, blocks, floorLights };
 }
 
 // ผลักวงกลมของตัวละคร (x, z) ออกจากสิ่งกีดขวาง · คืนตำแหน่งใหม่

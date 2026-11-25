@@ -14,14 +14,14 @@ test('ชื่อห้อง: ภาษาไทยได้ ช่องว�
 
 const song = (id) => ({ id, videoId: `vid${id}`.padEnd(11, 'x'), title: `เพลง ${id}`, channel: '', thumb: '', addedBy: 'Man' });
 
-// ค่าเริ่มต้นของห้องคือ 'similar' แต่เทสเก่าเขียนตามพฤติกรรม 'stop' → ระบุโหมดได้
+// ค่าเริ่มต้นของห้องคือ 'loop' แต่เทสเก่าเขียนตามพฤติกรรม 'stop' → ระบุโหมดได้
 function roomWith(ids, now = 0, whenEmpty = 'stop') {
   const start = { ...createRoomState(now), whenEmpty };
   return ids.reduce((s, id) => reduce(s, { type: 'add', item: song(id) }, now), start);
 }
 
-test('ห้องใหม่ตั้งค่า "เมื่อคิวหมด" เป็นต่อเพลงแนวเดียวกัน', () => {
-  assert.equal(createRoomState(0).whenEmpty, 'similar');
+test('ห้องใหม่ตั้งค่า "เมื่อคิวหมด" เป็นวนคิว (ไม่ต่อเพลงเองอัตโนมัติ)', () => {
+  assert.equal(createRoomState(0).whenEmpty, 'loop');
 });
 
 test('โหมด loop: จบเพลงสุดท้าย → กลับไปเพลงแรก', () => {
@@ -192,4 +192,30 @@ test('sanitizeAction move: ต้องมี id และ to เป็นจำ
   assert.equal(sanitizeAction({ type: 'move', id: 'x', to: -1 }), null);
   assert.equal(sanitizeAction({ type: 'move', id: 'x', to: 1.5 }), null);
   assert.equal(sanitizeAction({ type: 'move', id: 5, to: 1 }), null);
+});
+
+// เพลงซ้ำ = videoId เดียวกับเพลงที่กำลังเล่นหรือยังรอเล่น · เพลงที่เล่นผ่านไปแล้วเพิ่มใหม่ได้ (อยากฟังอีกรอบ)
+const sameVideo = (id, videoOf) => ({ ...song(id), videoId: song(videoOf).videoId });
+
+test('add: เพลงที่อยู่ในคิวรอเล่นหรือกำลังเล่นอยู่ → ไม่เพิ่มซ้ำ (คืน state เดิม)', () => {
+  const s = roomWith(['a', 'b']);
+  assert.equal(reduce(s, { type: 'add', item: sameVideo('a2', 'a') }, 1), s);
+  assert.equal(reduce(s, { type: 'add', item: sameVideo('b2', 'b') }, 1), s);
+});
+
+test('add: เพลงที่เล่นผ่านไปแล้ว หรือคิวจบแล้ว → เพิ่มซ้ำได้', () => {
+  let s = roomWith(['a', 'b']);
+  s = reduce(s, { type: 'next' }, 1);
+  assert.equal(reduce(s, { type: 'add', item: sameVideo('a2', 'a') }, 2).queue.length, 3);
+  s = reduce(s, { type: 'ended', id: 'b' }, 3);
+  assert.equal(s.finished, true);
+  const again = reduce(s, { type: 'add', item: sameVideo('b2', 'b') }, 4);
+  assert.equal(again.currentId, 'b2');
+});
+
+test('addMany/autofill: ตัดเพลงที่ซ้ำกับคิวรอเล่น และซ้ำกันเองในชุด · ซ้ำหมด → state เดิม', () => {
+  const s = roomWith(['a']);
+  const out = reduce(s, { type: 'addMany', items: [sameVideo('a2', 'a'), song('x'), sameVideo('x2', 'x')] }, 1);
+  assert.deepEqual(out.queue.map((q) => q.id), ['a', 'x']);
+  assert.equal(reduce(s, { type: 'autofill', items: [sameVideo('a3', 'a')] }, 1), s);
 });

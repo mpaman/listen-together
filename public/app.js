@@ -13,6 +13,7 @@ import { createLyrics } from './lyrics.js';
 import { createStageView } from './stage-view.js';
 import { createMediaSession, registerServiceWorker } from './pwa.js';
 import * as ui from './ui.js';
+import { quadInside, quadMatrix } from './lounge-screen.js';
 
 const TICK_MS = 400;
 const NAME_KEY = 'listen-together:name';
@@ -119,6 +120,7 @@ function applyState(next, force = false) {
   ui.renderMode(room.whenEmpty);
   lounge?.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
   $('game-song').textContent = currentItem(room)?.title ?? 'ยังไม่มีเพลง';
+  placeStageMv();
   syncer?.reconcile(room, clock.serverNow());
 }
 
@@ -360,6 +362,7 @@ function setGameOpen(open) {
   document.body.classList.toggle('is-gaming', open);
   if (open) $('lounge').focus({ preventScroll: true });
   else $('game-open').focus();
+  placeStageMv();
 }
 
 function bindGame() {
@@ -382,6 +385,7 @@ async function initLounge() {
       onNotice: (text) => ui.toast(text),
       onPick: (id) => joined && socket.emit('item:pick', id),
       onDrop: () => joined && socket.emit('item:drop'),
+      onScreenQuad: onStageQuad,
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {
@@ -394,6 +398,9 @@ async function initLounge() {
   }
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
   document.querySelector('.lounge-actions [data-act="drop"]').addEventListener('click', () => lounge.dropHeld());
+  for (const btn of document.querySelectorAll('.lounge-zoom [data-zoom]')) {
+    btn.addEventListener('click', () => lounge.zoomBy(btn.dataset.zoom === 'in' ? 1 / 1.15 : 1.15));
+  }
   $('reroll').addEventListener('click', () => {
     myLook = saveLook(randomLook());
     lounge.setMyLook(myLook);
@@ -404,6 +411,41 @@ async function initLounge() {
     sendChat($('say-input'));
   });
   if (room) lounge.setScreen(currentItem(room)?.title ?? null, room.isPlaying);
+}
+
+// ---------- จอ MV บนเวที 3D ----------
+// ยกตัวเล่น YouTube ตัวเดิมไปวางทับจอบนเวทีด้วย CSS (ไม่ย้ายใน DOM — ย้ายแล้ว iframe โหลดใหม่ เพลงสะดุด)
+// ได้ภาพเดียวกับที่ห้องเล่นอยู่ ไม่กินเน็ตเพิ่ม · ข้อเสีย: ตัวละครที่เดินผ่านหน้าจอจะโดนวิดีโอบัง
+const MV_W = 640;
+const MV_H = 360;
+let stageQuad = null; // มุมจอเวทีบนหน้าจอ (px ในกรอบลาน) ล่าสุดจาก lounge
+let stageSize = null;
+let stageTransform = null; // ค่าที่ตั้งไปล่าสุด (เหมือนเดิม = ไม่แตะ DOM)
+
+// เรียกได้บ่อย: ตอนกล้องขยับ / สถานะห้องเปลี่ยน / ทุกครึ่งวิระหว่างเปิดเกม (ตัวเล่นโหลดเพลงเสร็จไม่มี event มาบอก)
+function placeStageMv() {
+  const screen = document.querySelector('.screen');
+  const matrix =
+    !$('game').hidden && loadedCurrentItem() && stageQuad && quadInside(stageQuad, stageSize.w, stageSize.h)
+      ? quadMatrix(MV_W, MV_H, stageQuad)
+      : null;
+  let transform = '';
+  if (matrix) {
+    const rect = $('lounge').getBoundingClientRect();
+    transform = `translate(${rect.left}px, ${rect.top}px) matrix3d(${matrix.join(',')})`;
+  }
+  if (transform === stageTransform) return;
+  stageTransform = transform;
+  screen.classList.toggle('is-on-stage', Boolean(matrix));
+  screen.style.transform = transform;
+  lounge?.setMv(Boolean(matrix));
+}
+setInterval(() => !$('game').hidden && placeStageMv(), 500);
+
+function onStageQuad(quad, w, h) {
+  stageQuad = quad;
+  stageSize = { w, h };
+  placeStageMv();
 }
 
 // ---------- ตัวเล่น ----------
@@ -483,9 +525,26 @@ async function getJson(url) {
 }
 
 const songOf = (item) => ({ videoId: item.videoId, title: item.title, channel: item.channel });
-const addToQueue = (item) => send({ type: 'add', item: songOf(item) });
-// ส่งทั้งชุดเป็น action เดียว (server เพิ่มรวดเดียว คิวไม่กระพริบทีละเพลง)
-const addAllToQueue = (items) => send({ type: 'addMany', items: items.map(songOf) });
+// เพลงที่กำลังเล่น + รอเล่น (ตรงกับที่ server ใช้กันเพิ่มซ้ำใน room.js) — เช็คก่อนส่งเพื่อบอกคนกดว่าทำไมไม่เข้าคิว
+function upcomingVideoIds() {
+  if (!room || room.finished) return new Set();
+  const from = Math.max(0, room.queue.findIndex((q) => q.id === room.currentId));
+  return new Set(room.queue.slice(from).map((q) => q.videoId));
+}
+
+function addToQueue(item) {
+  if (upcomingVideoIds().has(item.videoId)) return ui.toast('เพลงนี้อยู่ในคิวแล้ว');
+  send({ type: 'add', item: songOf(item) });
+}
+
+// ส่งทั้งชุดเป็น action เดียว (server เพิ่มรวดเดียว คิวไม่กระพริบทีละเพลง) · server ตัดเพลงซ้ำเองด้วย
+function addAllToQueue(items) {
+  const upcoming = upcomingVideoIds();
+  const dup = items.filter((item) => upcoming.has(item.videoId)).length;
+  if (dup === items.length) return ui.toast('ทุกเพลงอยู่ในคิวแล้ว');
+  if (dup > 0) ui.toast(`ข้าม ${dup} เพลงที่อยู่ในคิวแล้ว`);
+  send({ type: 'addMany', items: items.map(songOf) });
+}
 const hasPlaylist = (text) => /[?&]list=[A-Za-z0-9_-]{10,}/.test(text);
 
 // ลิงก์ที่มี list= → แสดงทั้ง playlist ให้กด "เพิ่มทั้งหมด" ได้

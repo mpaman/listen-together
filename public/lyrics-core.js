@@ -47,3 +47,12 @@ export function formatOffset(offset) {
   const sign = offset > 0 ? '+' : '−';
   return `${sign}${Math.abs(offset)} วิ`;
 }
+
+// เพลงไทยอยู่แล้ว (ตัวอักษรไทย ≥30% ของตัวอักษรทั้งหมด) → ไม่ต้องโชว์ปุ่มแปลไทย
+// ตัวเลขเดียวกับ server/translate.js · ฝั่งเว็บใช้ตัดสินว่าจะโชว์ปุ่มไหม โดยไม่ต้องยิงไปแปลก่อน
+export function isMostlyThai(texts) {
+  const all = texts.join('');
+  const letters = all.match(/\p{L}/gu)?.length ?? 0;
+  if (letters === 0) return false;
+  return (all.match(/[฀-๿]/g)?.length ?? 0) / letters >= 0.3;
+}
