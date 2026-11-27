@@ -1,13 +1,9 @@
-// ลานกว้างแบบ voxel 8-bit: พื้นบล็อก ต้นไม้ สระ รั้ว ทางเดิน + เวทีฟังเพลงตรงกลาง
-// ตำแหน่งต้นไม้/ดอกไม้สุ่มด้วย seed คงที่ → ทุกเครื่องเห็นเหมือนกันและชนตรงกัน
-// ขนาดลาน + พื้นที่เวที/สระต้องตรงกับ server/avatar.js (ROOM_HALF_*) และ server/items.js (NO_SPAWN)
+// ลานกว้างแบบ voxel 8-bit: พื้นบล็อกต่างระดับ (ภูเขา/ที่ราบสูง/เสากระโดด) ต้นไม้ สระ รั้ว ทางเดิน + เวทีฟังเพลงตรงกลาง
+// ความสูงพื้นมาจาก lounge-terrain.js · ต้นไม้/ดอกไม้สุ่มด้วย seed คงที่ → ทุกเครื่องเห็นเหมือนกันและชนตรงกัน
 import * as THREE from 'three';
+import { BODY_RADIUS, cellAt, eachCell, groundAt, HALF_X, HALF_Z, inRect, LEVEL, noise2, onPath, PARKOUR, POND, STAGE } from './lounge-terrain.js';
 
-export const HALF_X = 24;
-export const HALF_Z = 18;
-const STAGE = { x0: -8, x1: 8, z0: -7, z1: 5 };
-const POND = { x0: 11, x1: 19, z0: 6, z1: 12 };
-const BODY_RADIUS = 0.28;
+export { HALF_X, HALF_Z } from './lounge-terrain.js';
 
 // ที่นั่ง 8 ที่ (= SEAT_COUNT ใน server): โซฟาซ้าย 3 · โซฟาขวา 3 · บีนแบ็ก 2
 // ry = ทิศที่หันหน้าเมื่อนั่ง (0 = หันหาจอ/กล้อง +z)
@@ -34,6 +30,13 @@ const C = {
   dark: 0x262b44,
   fence: 0xc28569,
   flower: [0xe43b44, 0xfee761, 0xffffff, 0xb55088, 0x2ce8f5],
+  dirt: [0x733e39, 0x8f563b, 0x7a4a3a],
+  rock: [0x5a6988, 0x3a4466, 0x8b9bb4],
+  snow: [0xffffff, 0xe8f0ff, 0xc0cbdc],
+  mesaTop: [0xe4a672, 0xead4aa],
+  mesaSide: [0xb86f50, 0xbe4a2f, 0xa65f43],
+  pillarTop: [0x2ce8f5, 0x0099db],
+  pillarSide: [0x3a4466, 0x262b44],
 };
 
 // RNG ที่ให้ลำดับเดิมทุกครั้ง (mulberry32)
@@ -51,8 +54,6 @@ function seeded(seed) {
 export const DANCE_FLOOR = { x: 0, z: 0.6, r: 3 };
 export const onDanceFloor = (x, z) => Math.hypot(x - DANCE_FLOOR.x, z - DANCE_FLOOR.z) <= DANCE_FLOOR.r;
 
-const inRect = (x, z, r, pad = 0) => x >= r.x0 - pad && x <= r.x1 + pad && z >= r.z0 - pad && z <= r.z1 + pad;
-const onPath = (x, z) => (Math.abs(x) <= 1.2 && z > STAGE.z1) || (Math.abs(z - 9) <= 1.2 && Math.abs(x) < HALF_X);
 const pick = (list, rand) => list[Math.floor(rand() * list.length)];
 
 const lambert = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
@@ -67,7 +68,7 @@ function block(parent, w, h, d, color, x, y, z, { shadow = true } = {}) {
 }
 
 // กล่องเหมือนกันหลายชิ้น สีต่างกันได้ → InstancedMesh เดียว (วาดเร็ว)
-function instanced(scene, geometry, items, { shadow = true } = {}) {
+function instanced(scene, geometry, items, { shadow = true, receive = true } = {}) {
   const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshLambertMaterial({ flatShading: true }), items.length);
   const m = new THREE.Matrix4();
   const color = new THREE.Color();
@@ -77,12 +78,12 @@ function instanced(scene, geometry, items, { shadow = true } = {}) {
     mesh.setColorAt(i, color.setHex(it.color));
   });
   mesh.castShadow = shadow;
-  mesh.receiveShadow = true;
+  mesh.receiveShadow = receive;
   scene.add(mesh);
   return mesh;
 }
 
-function tileColor(x, z, rand) {
+function flatColor(x, z, rand) {
   const cx = x + 0.5;
   const cz = z + 0.5;
   if (inRect(cx, cz, POND)) return null; // สระ วาดแยก
@@ -94,17 +95,65 @@ function tileColor(x, z, rand) {
   return rand() < 0.08 ? C.grass[3] : pick(C.grass.slice(0, 3), rand);
 }
 
-function buildGround(scene, rand) {
-  const tiles = [];
-  const water = [];
-  for (let x = -HALF_X - 1; x < HALF_X + 1; x += 1) {
-    for (let z = -HALF_Z - 1; z < HALF_Z + 1; z += 1) {
-      const color = tileColor(x, z, rand);
-      if (color === null) water.push({ x: x + 0.5, y: -0.4, z: z + 0.5, color: pick(C.water, rand) });
-      else tiles.push({ x: x + 0.5, y: -0.25, z: z + 0.5, color });
+// สีหน้าบน/ด้านข้างของช่องที่ยกสูง ตามชนิดภูมิประเทศ + ความสูง (สูงมาก = หิน → หิมะ)
+function raisedColors(kind, level, rand) {
+  if (kind === 'mesa') return [pick(C.mesaTop, rand), pick(C.mesaSide, rand)];
+  if (kind === 'pillar') return [pick(C.pillarTop, rand), pick(C.pillarSide, rand)];
+  if (level >= 8) return [pick(C.snow, rand), pick(C.rock, rand)];
+  if (level >= 5) return [pick(C.stone, rand), pick(C.rock, rand)];
+  return [pick(C.grass.slice(0, 3), rand), pick(C.dirt, rand)];
+}
+
+// ช่องเดียว: ฝาบน (หนา 0.5 ผิวอยู่ที่ระดับพื้น) + เสาดินด้านล่างยืดตามความสูง
+function pushCell(out, x, z, level, top, side) {
+  const y = level * LEVEL;
+  (level > 0 ? out.raisedCaps : out.flatCaps).push({ x, y: y - 0.25, z, color: top });
+  if (level > 0) out.columns.push({ x, y: y / 2 - 0.5, z, sy: y, color: side });
+}
+
+// ภูเขาฉากหลังนอกรั้ว (เดินไม่ได้ แค่ให้ลานไม่ดูลอยกลางความมืด — จางหายไปในหมอก)
+function buildBackdrop(out, rand) {
+  const R = 10;
+  for (let ix = -HALF_X - 1 - R; ix < HALF_X + 1 + R; ix += 1) {
+    for (let iz = -HALF_Z - 1 - R; iz < HALF_Z + 1 + R; iz += 1) {
+      const d = Math.max(-HALF_X - 1 - ix, ix - HALF_X, -HALF_Z - 1 - iz, iz - HALF_Z);
+      if (d < 2) continue; // เว้นทุ่งหญ้าหลังรั้วไว้แคบๆ
+      const ramp = Math.min(1, (d - 1) / 4);
+      const level = Math.round((1 + noise2(ix, iz, 4, 5) * 11) * ramp);
+      if (level <= 0) continue;
+      const [top, side] = raisedColors('hill', level, rand);
+      pushCell(out, ix + 0.5, iz + 0.5, level, top, side);
     }
   }
-  instanced(scene, new THREE.BoxGeometry(1, 0.5, 1), tiles, { shadow: false });
+}
+
+function buildGround(scene, rand) {
+  const out = { flatCaps: [], raisedCaps: [], columns: [] };
+  const water = [];
+  eachCell((x, z, level, kind) => {
+    if (level === 0) {
+      const color = flatColor(x, z, rand);
+      if (color === null) water.push({ x: x + 0.5, y: -0.4, z: z + 0.5, color: pick(C.water, rand) });
+      else out.flatCaps.push({ x: x + 0.5, y: -0.25, z: z + 0.5, color });
+      return;
+    }
+    const [top, side] = raisedColors(kind, level, rand);
+    pushCell(out, x + 0.5, z + 0.5, level, top, side);
+  });
+  const cap = new THREE.BoxGeometry(1, 0.5, 1);
+  const column = new THREE.BoxGeometry(1, 1, 1);
+  const hits = [
+    instanced(scene, cap, out.flatCaps, { shadow: false }),
+    instanced(scene, cap, out.raisedCaps),
+    instanced(scene, column, out.columns),
+  ];
+  // ภูเขาฉากหลัง ~2,000 ก้อน: ไม่ทำเงา (อยู่นอกกรอบเงาอยู่แล้ว แต่ยังถูกวาดซ้ำในรอบเงาทุกเฟรม = เปลือง FPS)
+  const far = { flatCaps: [], raisedCaps: [], columns: [] };
+  buildBackdrop(far, rand);
+  hits.push(
+    instanced(scene, cap, far.raisedCaps, { shadow: false, receive: false }),
+    instanced(scene, column, far.columns, { shadow: false, receive: false }),
+  );
   instanced(scene, new THREE.BoxGeometry(1, 0.3, 1), water, { shadow: false });
   // ขอบสระเป็นหิน
   const rim = [];
@@ -123,11 +172,11 @@ function buildGround(scene, rand) {
   meadow.receiveShadow = true;
   scene.add(meadow);
 
-  // พื้นล่องหนไว้ให้คลิกเดิน (raycast)
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(HALF_X * 2 + 2, HALF_Z * 2 + 2), new THREE.MeshBasicMaterial({ visible: false }));
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
-  return floor;
+  // พื้นล่องหนสำรองไว้ให้คลิกเดิน (raycast) — เผื่อคลิกโดนช่องว่างระหว่างบล็อก
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(HALF_X * 2 + 2, HALF_Z * 2 + 2), new THREE.MeshBasicMaterial({ visible: false }));
+  plane.rotation.x = -Math.PI / 2;
+  scene.add(plane);
+  return [...hits, plane];
 }
 
 function buildFence(scene) {
@@ -153,7 +202,10 @@ function buildFence(scene) {
 
 // ต้นไม้ + ดอกไม้ + หิน (ไม่อยู่บนเวที/สระ/ทางเดิน/จุดเกิด)
 function buildNature(scene, rand, blocks) {
-  const free = (x, z, pad) => !inRect(x, z, STAGE, pad + 1) && !inRect(x, z, POND, pad) && !onPath(x, z) && Math.abs(x) < HALF_X - 1 && Math.abs(z) < HALF_Z - 1;
+  // ไม่ปลูกบนเวที/สระ/ทางเดิน/ลานเสากระโดด/ที่ราบสูง (ไว้ให้ยืนชมวิวโล่งๆ)
+  const free = (x, z, pad) => !inRect(x, z, STAGE, pad + 1) && !inRect(x, z, POND, pad) && !inRect(x, z, PARKOUR, pad)
+    && !onPath(x, z) && Math.abs(x) < HALF_X - 1 && Math.abs(z) < HALF_Z - 1
+    && cellAt(Math.floor(x), Math.floor(z)).kind !== 'mesa';
   const trunks = [];
   const leaves = [];
   const trees = [];
@@ -161,14 +213,16 @@ function buildNature(scene, rand, blocks) {
     const x = Math.round((rand() * 2 - 1) * (HALF_X - 2)) + 0.5;
     const z = Math.round((rand() * 2 - 1) * (HALF_Z - 2)) + 0.5;
     if (!free(x, z, 1.5) || trees.some((t) => Math.hypot(t.x - x, t.z - z) < 3.2)) continue;
+    const base = groundAt(x, z);
+    if (base >= 4) continue; // ยอดเขาหิมะ ไม่มีต้นไม้
     const h = 1.4 + Math.floor(rand() * 3) * 0.4;
     trees.push({ x, z });
-    trunks.push({ x, y: h / 2, z, sy: h, color: C.trunk });
+    trunks.push({ x, y: base + h / 2, z, sy: h, color: C.trunk });
     const leaf = pick(C.leaves, rand);
-    leaves.push({ x, y: h + 0.4, z, sx: 2.2, sy: 1, sz: 2.2, color: leaf });
-    leaves.push({ x, y: h + 1.2, z, sx: 1.6, sy: 0.8, sz: 1.6, color: leaf });
-    leaves.push({ x, y: h + 1.8, z, sx: 0.8, sy: 0.6, sz: 0.8, color: C.leaves[2] });
-    blocks.push({ box: false, x, z, r: 0.45 });
+    leaves.push({ x, y: base + h + 0.4, z, sx: 2.2, sy: 1, sz: 2.2, color: leaf });
+    leaves.push({ x, y: base + h + 1.2, z, sx: 1.6, sy: 0.8, sz: 1.6, color: leaf });
+    leaves.push({ x, y: base + h + 1.8, z, sx: 0.8, sy: 0.6, sz: 0.8, color: C.leaves[2] });
+    blocks.push({ box: false, x, z, r: 0.45, y0: base, y1: base + h + 2.3 });
   }
   instanced(scene, new THREE.BoxGeometry(0.5, 1, 0.5), trunks);
   instanced(scene, new THREE.BoxGeometry(1, 1, 1), leaves);
@@ -178,8 +232,9 @@ function buildNature(scene, rand, blocks) {
     const x = (rand() * 2 - 1) * (HALF_X - 1);
     const z = (rand() * 2 - 1) * (HALF_Z - 1);
     if (!free(x, z, 0) || trees.some((t) => Math.hypot(t.x - x, t.z - z) < 1.3)) continue;
-    flowers.push({ x, y: 0.12, z, color: C.grass[3], sy: 1.6, sx: 0.4, sz: 0.4 }); // ก้าน
-    flowers.push({ x, y: 0.28, z, color: pick(C.flower, rand) });
+    const base = groundAt(x, z);
+    flowers.push({ x, y: base + 0.12, z, color: C.grass[3], sy: 1.6, sx: 0.4, sz: 0.4 }); // ก้าน
+    flowers.push({ x, y: base + 0.28, z, color: pick(C.flower, rand) });
   }
   instanced(scene, new THREE.BoxGeometry(0.16, 0.16, 0.16), flowers, { shadow: false });
 
@@ -189,8 +244,9 @@ function buildNature(scene, rand, blocks) {
     const z = (rand() * 2 - 1) * (HALF_Z - 2);
     if (!free(x, z, 1) || trees.some((t) => Math.hypot(t.x - x, t.z - z) < 2)) continue;
     const s = 0.6 + rand() * 0.5;
-    rocks.push({ x, y: s * 0.35, z, sx: s, sy: s * 0.7, sz: s * 0.9, color: pick(C.stone, rand) });
-    blocks.push({ box: false, x, z, r: s * 0.5 });
+    const base = groundAt(x, z);
+    rocks.push({ x, y: base + s * 0.35, z, sx: s, sy: s * 0.7, sz: s * 0.9, color: pick(C.stone, rand) });
+    blocks.push({ box: false, x, z, r: s * 0.5, y0: base, y1: base + s * 0.7 });
   }
   instanced(scene, new THREE.BoxGeometry(1, 1, 1), rocks);
 }
@@ -314,10 +370,13 @@ export function buildWorld(scene) {
 }
 
 // ผลักวงกลมของตัวละคร (x, z) ออกจากสิ่งกีดขวาง · คืนตำแหน่งใหม่
-export function pushOutOfBlocks(blocks, x, z) {
+// y = ระดับเท้า: ของที่มีช่วงความสูง (y0..y1) จะชนเฉพาะตอนตัวซ้อนกับช่วงนั้น → กระโดดข้ามก้อนหินได้
+const BODY_HEIGHT = 1.6;
+export function pushOutOfBlocks(blocks, x, z, y = 0) {
   let nx = x;
   let nz = z;
   for (const b of blocks) {
+    if (b.y1 !== undefined && (y >= b.y1 || y + BODY_HEIGHT <= b.y0)) continue;
     if (b.box) {
       const cx = Math.max(b.x - b.hx, Math.min(b.x + b.hx, nx));
       const cz = Math.max(b.z - b.hz, Math.min(b.z + b.hz, nz));

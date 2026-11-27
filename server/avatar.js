@@ -3,10 +3,12 @@
 
 // จำนวนตัวเลือกของแต่ละส่วน — ต้องตรงกับ public/lounge-avatar.js
 export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4 };
-// ลานทั้งหมด (เวทีฟังเพลงอยู่ตรงกลาง) — ต้องตรงกับ WORLD ใน public/lounge-world.js
+// ลานทั้งหมด (เวทีฟังเพลงอยู่ตรงกลาง) — ต้องตรงกับ HALF_X/HALF_Z ใน public/lounge-terrain.js
 export const ROOM_HALF_X = 24;
 export const ROOM_HALF_Z = 18;
 export const SEAT_COUNT = 8;
+// สูงสุดที่ยืนได้ (ยอดเขา 10 ขั้น × 0.5 m) + เผื่อลอยตอนกระโดด — ต้องตรงกับ MAX_LEVEL/LEVEL ใน public/lounge-terrain.js
+export const MAX_Y = 7;
 export const GESTURES = ['jump', 'punch', 'wave', 'dance', 'laugh', 'love', 'party', 'cry', 'clap', 'angry', 'hit'];
 
 const isIndex = (v, n) => Number.isInteger(v) && v >= 0 && v < n;
@@ -31,6 +33,8 @@ export function cleanPose(raw) {
   const round = (v) => Math.round(v * 100) / 100;
   return {
     x: round(clamp(x, -ROOM_HALF_X, ROOM_HALF_X)),
+    // y = ความสูงเท้า (ยืนบนภูเขา/กำลังกระโดด) · client รุ่นเก่าไม่ส่งมา → 0 (ยืนพื้น)
+    y: Number.isFinite(raw.y) ? round(clamp(raw.y, 0, MAX_Y)) : 0,
     z: round(clamp(z, -ROOM_HALF_Z, ROOM_HALF_Z)),
     ry: round(((ry % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)),
     sit: isIndex(raw.sit, SEAT_COUNT) ? raw.sit : null,

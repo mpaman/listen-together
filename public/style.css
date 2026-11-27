@@ -820,6 +820,8 @@ a.room-btn { text-decoration: none; }
 }
 .lounge-view:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .lounge-view canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; } /* absolute: ขนาดจริงของ canvas จะได้ไม่ดันคอลัมน์ให้กว้างเกินจอ */
+.lounge-view canvas.is-orbiting { cursor: grabbing; } /* คลิกขวาลากหมุนกล้องอยู่ */
+.lounge-fps { position: absolute; top: 8px; left: 8px; z-index: 3; padding: 2px 8px; border-radius: 6px; background: rgb(0 0 0 / 0.55); color: #22c55e; font: 600 12px/1.6 ui-monospace, monospace; pointer-events: none; } /* กด P ในลาน */
 .lounge-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .lounge-help {
   position: absolute;

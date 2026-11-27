@@ -6,6 +6,7 @@ import {
   cleanPose,
   createPerSecondLimiter,
   LOOK_PARTS,
+  MAX_Y,
   randomLook,
   ROOM_HALF_X,
   SEAT_COUNT,
@@ -60,4 +61,12 @@ test('createPerSecondLimiter: เกินโควต้าในวินา�
   assert.equal(allow(10), true);
   assert.equal(allow(20), false);
   assert.equal(allow(1000), true);
+});
+
+test('cleanPose: y = ความสูงเท้า บีบให้อยู่ 0..MAX_Y · client เก่าไม่ส่ง y → 0', () => {
+  assert.equal(cleanPose({ x: 0, y: 3.456, z: 0, ry: 0 }).y, 3.46);
+  assert.equal(cleanPose({ x: 0, y: 999, z: 0, ry: 0 }).y, MAX_Y);
+  assert.equal(cleanPose({ x: 0, y: -2, z: 0, ry: 0 }).y, 0);
+  assert.equal(cleanPose({ x: 0, z: 0, ry: 0 }).y, 0);
+  assert.equal(cleanPose({ x: 0, y: 'up', z: 0, ry: 0 }).y, 0);
 });

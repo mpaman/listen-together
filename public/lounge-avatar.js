@@ -128,7 +128,6 @@ function buildHat(head, kind, color) {
 // ท่าทางชั่วคราว: ชื่อท่า → ระยะเวลา (วินาที)
 const GESTURE_SEC = { jump: 0.8, punch: 0.4, wave: 1.6, dance: 2.4, clap: 1.4, hit: 0.7, laugh: 1.4, love: 1.4, party: 1.6, cry: 1.6, angry: 1.4 };
 
-const easeOut = (t) => 1 - (1 - t) ** 3;
 const pulse = (t) => Math.sin(Math.PI * Math.min(1, Math.max(0, t))); // 0 → 1 → 0
 
 export function createAvatar(look) {
@@ -192,6 +191,14 @@ export function createAvatar(look) {
   let sitK = 0; // 0 = ยืน · 1 = นั่งเต็มที่ (ค่อยๆ เปลี่ยน ไม่วาร์ป)
   let blinkIn = 1 + Math.random() * 3; // อีกกี่วินาทีจะกะพริบ
   let blinkT = -1; // >=0 = กำลังกะพริบ
+  let squash = 0; // ย่อรับแรงตอนลงพื้น 0..1 แล้วค่อยๆ คืน
+  let airK = 0; // 0 = ยืนพื้น · 1 = ลอยเต็มที่ (ไล่ค่าให้ท่าไม่วูบ)
+  let airV = 0; // +1 พุ่งขึ้น · -1 ร่วงลง (เฉลี่ยแล้ว)
+  let headLag = 0; // หัวเด้งตามตัวช้ากว่านิดนึง (secondary motion)
+
+  function land(strength) {
+    squash = Math.max(squash, 0.35 + strength * 0.65);
+  }
 
   function play(type) {
     if (GESTURE_SEC[type]) gesture = { type, t: 0 };
@@ -208,35 +215,64 @@ export function createAvatar(look) {
   // speed = ความเร็วเทียบกับเดินปกติ (1 = เดิน, ~1.7 = วิ่ง) · seated = นั่งอยู่ไหม
   // ทุกเฟรมคืนท่าเริ่มต้นก่อน แล้วค่อยใส่ท่า
   // groove = ตำแหน่งในจังหวะเพลง 0..1 (ทุกคนในฟลอร์ใช้ค่าเดียวกันจากนาฬิกาเครื่อง → โยกพร้อมกัน) · null = ไม่โยก
-  function update(dt, { speed = 0, seated = false, groove = null } = {}) {
+  // air = null (ยืนพื้น) หรือ -1..1 (ลอย: + พุ่งขึ้น / − ร่วงลง) · lean = -1..1 เลี้ยวซ้าย(+)/ขวา(−) → เอียงเข้าโค้ง
+  function update(dt, { speed = 0, seated = false, groove = null, air = null, lean = 0 } = {}) {
     clock += dt;
     sitK += ((seated ? 1 : 0) - sitK) * (1 - Math.exp(-dt * 9));
     if (Math.abs(sitK - (seated ? 1 : 0)) < 0.002) sitK = seated ? 1 : 0;
+    airK += ((air === null ? 0 : 1) - airK) * (1 - Math.exp(-dt * 18));
+    if (air !== null) airV += (air - airV) * (1 - Math.exp(-dt * 10));
+    squash *= Math.exp(-dt * 7);
     const stand = 1 - sitK;
+    const ground = 1 - airK; // ท่าเดินจางลงตอนลอย
     const move = Math.min(speed, 1.8);
-    const idle = Math.max(0, 1 - move * 2.5) * stand; // นิ่งมาก = 1
+    const run = Math.max(0, Math.min(1, (move - 1) / 0.6)); // 0 = เดิน · 1 = วิ่งเต็มที่
+    const idle = Math.max(0, 1 - move * 2.5) * stand * ground; // นิ่งมาก = 1
 
     // ก้าวตามความเร็วจริง (เดินช้าก้าวถี่น้อย วิ่งถี่ขึ้น) · แกว่งแขนขากว้างขึ้นตอนวิ่ง
-    walkPhase += dt * 10.5 * move;
+    walkPhase += dt * (10.5 + run * 2) * move;
     const sin = Math.sin(walkPhase);
-    const swing = sin * (0.5 + Math.min(move, 1.8) * 0.28) * Math.min(move * 1.6, 1) * stand;
+    const step = Math.min(move * 1.6, 1) * stand * ground;
+    const swing = sin * (0.5 + move * 0.28 + run * 0.15) * step;
+    // ตัวเด้ง 2 ครั้งต่อรอบก้าว · วิ่งเด้งสูงกว่า (มีช่วงลอยสั้นๆ) · ลดลงไปตอนเท้าแตะพื้น
+    const bob = Math.abs(sin) ** (1 + run) * (0.06 + run * 0.06) * move * stand * ground;
+    headLag += (bob - headLag) * (1 - Math.exp(-dt * 14));
 
-    body.position.set(0, Math.abs(sin) * 0.06 * move * stand, 0);
-    body.rotation.set(0.07 * move * stand, -sin * 0.1 * Math.min(move, 1.2) * stand, 0); // โน้มตัว + บิดลำตัวสวนกับแขน
-    body.scale.set(1, 1, 1);
+    body.position.set(sin * 0.025 * step, bob - squash * 0.12, 0); // สะโพกถ่ายน้ำหนักซ้ายขวา
+    body.rotation.set(
+      (0.07 * move + run * 0.14) * stand * ground, // โน้มตัวไปหน้า วิ่งยิ่งโน้ม
+      -sin * (0.1 + run * 0.06) * Math.min(move, 1.2) * stand * ground, // บิดลำตัวสวนกับแขน
+      sin * 0.035 * step - lean * 0.22 * Math.min(1, move) * stand, // ถ่ายน้ำหนัก + เอียงเข้าโค้ง
+    );
+    body.scale.set(1 + squash * 0.1, 1 - squash * 0.16, 1 + squash * 0.1);
 
-    // หายใจ + หันหัวเบาๆ ตอนยืนนิ่ง (นั่งก็หายใจ แต่น้อยกว่า)
-    const breathe = Math.sin(clock * 2.3);
+    // หายใจ + หันหัวเบาๆ ตอนยืนนิ่ง (นั่งก็หายใจ แต่น้อยกว่า) · หัวเด้งตามตัวช้ากว่านิด + ก้มเงยสวนแรงโน้ม
+    const breathe = Math.sin(clock * 2.3) * (1 + run * 1.5);
     parts.torso.scale.set(1 + breathe * 0.012, 1 + breathe * 0.02, 1 + breathe * 0.012);
-    parts.head.rotation.set(0, Math.sin(clock * 0.7) * 0.2 * idle + Math.sin(clock * 0.9) * 0.08 * sitK, Math.sin(clock * 0.5) * 0.03 * idle);
+    parts.head.position.y = 1.33 + (headLag - bob) * 0.6;
+    parts.head.rotation.set(
+      -run * 0.1 * stand + squash * 0.15,
+      Math.sin(clock * 0.7) * 0.2 * idle + Math.sin(clock * 0.9) * 0.08 * sitK,
+      Math.sin(clock * 0.5) * 0.03 * idle + lean * 0.1 * stand,
+    );
 
-    parts.legL.rotation.set(swing * stand - (Math.PI / 2) * sitK, 0, 0);
-    parts.legR.rotation.set(-swing * stand - (Math.PI / 2) * sitK, 0, 0);
+    // ท่าลอย: พุ่งขึ้น = พับขาข้างนึง แขนเหวี่ยงขึ้น · ร่วงลง = ขายืดลงเตรียมรับพื้น แขนกางทรงตัว
+    const up = (airV + 1) / 2;
+    const flap = Math.sin(clock * 18) * 0.12 * (1 - up);
+    const airLegL = -0.9 * up - 0.25 * (1 - up);
+    const airLegR = -0.35 * up + 0.15 * (1 - up);
+    const airArmX = -1.1 * up - 0.3 * (1 - up);
+    const airArmZ = 0.35 * up + (1.2 + flap) * (1 - up);
+
+    const legBend = squash * 0.55; // ลงพื้น = ย่อเข่า (ขาทั้งท่อนพับไปหน้า)
+    parts.legL.rotation.set((swing - legBend) * stand - (Math.PI / 2) * sitK + airLegL * airK * stand, 0, 0);
+    parts.legR.rotation.set((-swing - legBend) * stand - (Math.PI / 2) * sitK + airLegR * airK * stand, 0, 0);
     const sway = breathe * 0.025 * stand;
-    // ถือของ: แขนขวายกนิดๆ ไม่แกว่งเต็มที่ (ดูเหมือนถือจริง)
+    // ถือของ: แขนขวายกนิดๆ ไม่แกว่งเต็มที่ (ดูเหมือนถือจริง) · วิ่ง = แขนยกไปหน้านิดๆ แบบเหวี่ยงแขนวิ่ง
     const holding = parts.held ? 1 : 0;
-    parts.armL.rotation.set(-swing * 0.9 - 0.3 * sitK, 0, -0.08 - sway);
-    parts.armR.rotation.set(swing * 0.9 * (1 - holding * 0.6) - 0.3 * sitK - holding * 0.35, 0, 0.08 + sway);
+    const pump = -run * 0.35 * step;
+    parts.armL.rotation.set(-swing * 0.95 + pump - 0.3 * sitK + airArmX * airK, 0, -0.08 - sway - airArmZ * airK - squash * 0.3);
+    parts.armR.rotation.set(swing * 0.95 * (1 - holding * 0.6) + pump - 0.3 * sitK - holding * 0.35 + airArmX * airK * (1 - holding * 0.5), 0, 0.08 + sway + airArmZ * airK + squash * 0.3);
     if (parts.held) animateItem(parts.held, clock);
 
     // กะพริบตา
@@ -271,10 +307,11 @@ export function createAvatar(look) {
     const wave = (hz) => Math.sin(gesture.t * hz);
     switch (gesture.type) {
       case 'jump': {
+        // ท่าทางตอนกระโดด: ตัวลอยจริงมาจากฟิสิกส์ใน lounge.js (root ทั้งตัวขยับ) ตรงนี้แค่พับขา/กางแขน
         // ย่อตัวเตรียม (0–15%) → ลอย (15–85%) → ลงพื้นแล้วย่อรับแรง (85–100%)
         const crouch = p < 0.15 ? pulse(p / 0.15) : p > 0.85 ? pulse((p - 0.85) / 0.15) * 0.7 : 0;
         const air = p >= 0.15 && p <= 0.85 ? pulse((p - 0.15) / 0.7) : 0;
-        body.position.y += easeOut(air) * 0.85 - crouch * 0.1;
+        body.position.y -= crouch * 0.1;
         body.scale.y = 1 - crouch * 0.06 + air * 0.04;
         parts.legL.rotation.x = parts.legR.rotation.x = -0.55 * crouch - 0.35 * air;
         parts.armL.rotation.set(0.7 * crouch - 0.5 * air, 0, -0.9 * air);
@@ -341,5 +378,6 @@ export function createAvatar(look) {
     held: () => heldKind,
     isBusy: () => gesture !== null,
     sitAmount: () => sitK,
+    land,
   };
 }

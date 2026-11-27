@@ -6,11 +6,13 @@ import * as THREE from 'three';
 import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
 import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
 import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
+import { AIR_STEP, blockedAt, cellAt, groundAt, STEP_UP, supportAt } from './lounge-terrain.js';
+import { createFx } from './lounge-fx.js';
 
 const WALK_SPEED = 3;
 const RUN_SPEED = 5.2; // กด Shift ค้าง
 const PERSONAL_SPACE = 0.55; // ใกล้กันกว่านี้จะถูกผลักออกเบาๆ ไม่ให้ซ้อนกัน
-const POSE_SEND_MS = 100;
+const POSE_SEND_MS = 75; // ~13 ครั้ง/วิ (server ให้ไม่เกิน 15) → ตัวคนอื่นขยับลื่นขึ้น
 const PUNCH_RANGE = 1.6;
 const PUNCH_CONE = Math.cos((55 * Math.PI) / 180);
 const KNOCKBACK = 2.2;
@@ -20,7 +22,16 @@ const BUBBLE_LEN = 70;
 const SNAP_DIST = 4;
 const PICK_DIST = 1; // เดินเข้าใกล้ของเท่านี้ = เก็บ
 const PICK_RETRY_MS = 800; // server ปฏิเสธ (อีกคนเก็บไปก่อน) → ไม่ส่งซ้ำรัวๆ
-const PIXEL_HEIGHT = 300; // เรนเดอร์สูงแค่นี้พิกเซลแล้วขยาย = ภาพแตกเป็นพิกเซลแบบเกม 8-bit
+// ความละเอียด (กด V สลับ · จำไว้ในเครื่อง): เรนเดอร์สูงเท่านี้พิกเซลแล้วขยาย · 300 = ภาพแตกแบบ 8-bit · Infinity = เต็มจอ
+// ยิ่งคมยิ่งกินเครื่อง → เครื่องช้าเลือก 8-bit แล้ว FPS จะกลับมา
+const QUALITY = [
+  { label: '8-bit', height: 300 },
+  { label: 'คม', height: 600 },
+  { label: 'คมสุด', height: Infinity },
+];
+const QUALITY_KEY = 'lounge-quality';
+const RUN_FOV_KICK = 5; // วิ่งแล้วมุมกล้องกว้างขึ้นนิดๆ ให้รู้สึกเร็ว
+const BASE_FOV = 40;
 const SKY = 0x2b2747;
 // จังหวะไฟ/ลำโพง/โยกตัว: YouTube ไม่ให้อ่านเสียงจริง → ใช้จังหวะคงที่ 120 BPM (เพลงป็อปส่วนใหญ่อยู่แถวนี้)
 // นับจากนาฬิกาเครื่อง ทุกตัวในฟลอร์จึงโยกพร้อมกัน แต่ไม่ได้ตรงบีตเพลงเป๊ะ
@@ -30,6 +41,18 @@ const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 2;
 const ZOOM_STEP = 1.15;
 const LOOK_AHEAD = 1.5;
+// กระโดดจริง (มีแรงโน้มถ่วง): สูงสุด ≈ v²/2g ≈ 1.3 m → ขึ้นบล็อกสูง 2 ขั้น (1 m) ได้ แต่ 3 ขั้นต้องหาทางอ้อม
+const GRAVITY = 22;
+const JUMP_SPEED = 7.6;
+const COYOTE_MS = 120; // เพิ่งเดินตกขอบไปแป๊บเดียว ยังกดกระโดดได้ (กันรู้สึกว่ากดแล้วไม่ติด)
+const STUCK_MS = 600; // แตะพื้นให้เดินแต่ติดหน้าผานานเท่านี้ → เลิกเดิน ไม่ดันกำแพงค้าง
+// หมุนกล้อง (คลิกขวาลาก): yaw = หมุนรอบตัว · pitch = มุมก้ม (ค่าเดิม ≈ 55° จากแนวราบ)
+const ORBIT_SPEED = 0.008;
+const PITCH_DEFAULT = Math.atan2(12, 8.5);
+const PITCH_MIN = 0.22;
+const PITCH_MAX = 1.4;
+const CAM_DIST = Math.hypot(12, 8.5);
+const CAM_CLEARANCE = 0.8; // กล้องอยู่สูงกว่าพื้นใต้มันอย่างน้อยเท่านี้ (ไม่มุดเข้าภูเขา)
 // จอ MV บนเวที (16:9 กลางจอตัวหนังสือ) — ต้องอยู่ในกรอบ PlaneGeometry ของ buildScreen (7.2 × 1.8)
 const MV = { halfW: 1.6, y0: 1.1, y1: 2.9, z: -6.24 };
 
@@ -138,13 +161,13 @@ function createTag(layer, name, isMe) {
 export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.BasicShadowMap; // เงาขอบแข็ง เข้ากับภาพพิกเซล
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(SKY);
   scene.fog = new THREE.Fog(SKY, 26, 46);
-  const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 120);
+  const camera = new THREE.PerspectiveCamera(BASE_FOV, 16 / 9, 0.1, 120);
 
   scene.add(new THREE.HemisphereLight(0xc7d6ff, 0x3e2731, 1.5));
   const sun = new THREE.DirectionalLight(0xffe2b0, 2.2);
@@ -155,14 +178,18 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   const { floor, seatHits, speakers, blocks, floorLights } = buildWorld(scene);
   const drawScreen = buildScreen(scene);
+  const fx = createFx(scene);
   let music = false;
   let screenTitle = null;
   let mvOn = false; // ตัวเล่น YouTube วางทับจอเวทีอยู่ไหม (app.js บอกผ่าน setMv)
   let lastEqAt = 0;
   let zoom = 1;
+
+  let camYaw = 0;
+  let camPitch = PITCH_DEFAULT;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-  const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed, vel, lastDrop }
+  const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed, vel, vy, viewY, lastDrop }
   let myId = null;
 
   // ---------- จัดการตัวละคร ----------
@@ -171,15 +198,22 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const av = createAvatar(look);
     av.setHeld(held ?? null);
     const isMe = id === myId;
+    // client เก่าไม่ส่ง y มา → ยืนบนพื้นตรงนั้น
+    const y = Number.isFinite(pose.y) ? pose.y : supportAt(pose.x, pose.z);
     const entry = {
       av,
       tag: createTag(layer, name, isMe),
-      pos: new THREE.Vector3(pose.x, 0, pose.z),
+      pos: new THREE.Vector3(pose.x, y, pose.z),
       ry: pose.ry,
-      target: { x: pose.x, z: pose.z, ry: pose.ry },
+      target: { x: pose.x, y, z: pose.z, ry: pose.ry },
       sit: pose.sit ?? null,
       speed: 0,
       vel: { x: 0, z: 0 }, // ความเร็วจริง (m/s) ของเรา — ค่อยๆ เร่ง/ชะลอ ไม่ได้เริ่ม-หยุดทันที
+      vy: 0, // ความเร็วแนวดิ่ง (กระโดด/ตก)
+      viewY: y, // ความสูงที่วาดจริง — ขึ้นบันไดแล้วค่อยๆ ยกตัว ไม่กระตุกทีละขั้น
+      groundedAt: performance.now(),
+      grounded: true,
+      stuckSince: null,
     };
     av.root.position.copy(entry.pos);
     scene.add(av.root);
@@ -231,10 +265,11 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       glow.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
       glow.position.y = -0.33;
       group.add(glow);
-      group.position.set(x, 0.35, z);
+      const base = groundAt(x, z); // ของเกิดบนภูเขาได้ → ลอยเหนือพื้นตรงนั้น
+      group.position.set(x, base + 0.35, z);
       group.userData.seed = id;
       scene.add(group);
-      ground.set(id, { group, kind, x, z });
+      ground.set(id, { group, kind, x, z, base });
     }
   }
 
@@ -242,7 +277,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const t = now / 1000;
     for (const item of ground.values()) {
       const s = item.group.userData.seed;
-      item.group.position.y = 0.4 + Math.sin(t * 2.4 + s) * 0.08;
+      item.group.position.y = item.base + 0.4 + Math.sin(t * 2.4 + s) * 0.08;
       item.group.rotation.y = t * 1.4 + s;
       animateItem(item.group.children[0], t);
     }
@@ -259,6 +294,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
         continue;
       }
       if (dist > PICK_DIST) continue;
+      if (Math.abs(item.base - entry.pos.y) > 1.2) continue; // ของอยู่บนหน้าผาเหนือหัว/ใต้เท้า = ยังไม่ถึง
       if (now - (pickTriedAt.get(id) ?? -Infinity) < PICK_RETRY_MS) continue;
       pickTriedAt.set(id, now);
       onPick?.(id);
@@ -285,14 +321,14 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   let hitCooldownUntil = 0;
 
   function poseOf(entry) {
-    return { x: entry.pos.x, z: entry.pos.z, ry: entry.ry, sit: entry.sit };
+    return { x: entry.pos.x, y: entry.pos.y, z: entry.pos.z, ry: entry.ry, sit: entry.sit };
   }
 
   function sendPose(now, force = false) {
     const entry = me();
     if (!entry || (!force && now - lastSendAt < POSE_SEND_MS)) return;
     const pose = poseOf(entry);
-    const key = `${pose.x.toFixed(2)},${pose.z.toFixed(2)},${pose.ry.toFixed(2)},${pose.sit}`;
+    const key = `${pose.x.toFixed(2)},${pose.y.toFixed(2)},${pose.z.toFixed(2)},${pose.ry.toFixed(2)},${pose.sit}`;
     if (key === lastSent) return;
     lastSent = key;
     lastSendAt = now;
@@ -310,6 +346,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     entry.pos.set(seat.x, 0, seat.z);
     entry.ry = seat.ry;
     entry.vel.x = entry.vel.z = 0;
+    entry.vy = 0;
     walkTo = null;
     sendPose(performance.now(), true);
   }
@@ -319,7 +356,9 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (!entry || entry.sit === null) return;
     const seat = SEATS[entry.sit];
     entry.sit = null;
-    entry.pos.set(clampX(seat.x + Math.sin(seat.ry) * 0.9), 0, clampZ(seat.z + Math.cos(seat.ry) * 0.9));
+    const x = clampX(seat.x + Math.sin(seat.ry) * 0.9);
+    const z = clampZ(seat.z + Math.cos(seat.ry) * 0.9);
+    entry.pos.set(x, supportAt(x, z), z);
     sendPose(performance.now(), true);
   }
 
@@ -345,10 +384,19 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
 
   // ท่าของตัวเอง: เล่นทันทีที่เครื่องเรา แล้วบอกคนอื่น
+  // กระโดดจริง: ต้องยืนบนพื้น (หรือเพิ่งตกขอบไม่เกิน COYOTE_MS) · ลอยอยู่ = กดซ้ำไม่ได้ (ไม่มีกระโดด 2 ชั้น)
+  function jump(entry) {
+    if (entry.sit !== null) standUp();
+    if (performance.now() - entry.groundedAt > COYOTE_MS) return false;
+    entry.vy = JUMP_SPEED;
+    entry.groundedAt = -Infinity;
+    return true;
+  }
+
   function gesture(type) {
     const entry = me();
     if (!entry) return;
-    if (type === 'jump' && entry.sit !== null) standUp();
+    if (type === 'jump' && !jump(entry)) return;
     entry.av.play(type);
     if (EMOTES[type]) entry.tag.emote(EMOTES[type]);
     onGesture(type);
@@ -361,14 +409,23 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const dx = entry.pos.x - attacker.pos.x;
     const dz = entry.pos.z - attacker.pos.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > PUNCH_RANGE || dist < 0.01) return;
+    if (dist > PUNCH_RANGE || dist < 0.01 || Math.abs(entry.pos.y - attacker.pos.y) > 1) return;
     const facing = (Math.sin(attacker.ry) * dx + Math.cos(attacker.ry) * dz) / dist;
     if (facing < PUNCH_CONE) return;
     hitCooldownUntil = performance.now() + 800;
-    entry.sit = null;
+    if (entry.sit !== null) standUp();
     walkTo = null;
     entry.vel.x = entry.vel.z = 0;
-    entry.pos.set(clampX(entry.pos.x + (dx / dist) * KNOCKBACK), 0, clampZ(entry.pos.z + (dz / dist) * KNOCKBACK));
+    // กระเด็นไปเท่าที่ไปได้ (ข้างหลังเป็นหน้าผา = กระเด็นสั้นลง ไม่ทะลุภูเขา) + เด้งลอยขึ้นนิดนึง
+    for (const k of [1, 0.6, 0.3]) {
+      const nx = clampX(entry.pos.x + (dx / dist) * KNOCKBACK * k);
+      const nz = clampZ(entry.pos.z + (dz / dist) * KNOCKBACK * k);
+      if (blockedAt(nx, nz, entry.pos.y)) continue;
+      entry.pos.x = nx;
+      entry.pos.z = nz;
+      break;
+    }
+    entry.vy = Math.max(entry.vy, 3);
     entry.ry = Math.atan2(-dx, -dz); // หันกลับไปมองคนต่อย
     gesture('hit');
     entry.tag.say('โอ๊ย!');
@@ -384,14 +441,17 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   marker.visible = false;
   scene.add(marker);
 
+  // ทิศจากปุ่ม เทียบกับมุมกล้อง (W = เดินเข้าไปในจอเสมอ ไม่ว่าหมุนกล้องไปทางไหน)
   function keyDirection() {
-    let dx = 0;
-    let dz = 0;
-    if (keys.has('ArrowLeft') || keys.has('KeyA')) dx -= 1;
-    if (keys.has('ArrowRight') || keys.has('KeyD')) dx += 1;
-    if (keys.has('ArrowUp') || keys.has('KeyW')) dz -= 1;
-    if (keys.has('ArrowDown') || keys.has('KeyS')) dz += 1;
-    return [dx, dz];
+    let kx = 0;
+    let kz = 0;
+    if (keys.has('ArrowLeft') || keys.has('KeyA')) kx -= 1;
+    if (keys.has('ArrowRight') || keys.has('KeyD')) kx += 1;
+    if (keys.has('ArrowUp') || keys.has('KeyW')) kz -= 1;
+    if (keys.has('ArrowDown') || keys.has('KeyS')) kz += 1;
+    const c = Math.cos(camYaw);
+    const s = Math.sin(camYaw);
+    return [kx * c + kz * s, -kx * s + kz * c];
   }
 
   // ทิศที่อยากไป (จากคีย์บอร์ด หรือจุดที่แตะ) + ความเร็วสูงสุดที่อยากได้
@@ -418,10 +478,20 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
 
   // ขยับไปตามความเร็ว แล้วดันออกจากของแข็ง/ตัวคนอื่น
+  // ผนังภูเขาสูงเกินก้าว: ลองไปทั้งสองแกนก่อน ไม่ได้ค่อยไถไปตามผนังทีละแกน (ไม่หยุดกึกตอนเดินเฉียง)
+  const stepOf = (entry) => (entry.grounded ? STEP_UP : AIR_STEP);
+  function slideTerrain(entry, nx, nz) {
+    const y = entry.pos.y;
+    const step = stepOf(entry);
+    if (!blockedAt(nx, nz, y, step)) return [nx, nz];
+    if (!blockedAt(nx, entry.pos.z, y, step)) return [nx, entry.pos.z];
+    if (!blockedAt(entry.pos.x, nz, y, step)) return [entry.pos.x, nz];
+    return [entry.pos.x, entry.pos.z];
+  }
+
   function moveBy(entry, vx, vz, dt) {
-    let nx = clampX(entry.pos.x + vx * dt);
-    let nz = clampZ(entry.pos.z + vz * dt);
-    if (walkTo?.seat === undefined) [nx, nz] = pushOutOfBlocks(blocks, nx, nz); // เดินไปนั่ง = ผ่านโซฟาได้
+    let [nx, nz] = slideTerrain(entry, clampX(entry.pos.x + vx * dt), clampZ(entry.pos.z + vz * dt));
+    if (walkTo?.seat === undefined) [nx, nz] = pushOutOfBlocks(blocks, nx, nz, entry.pos.y); // เดินไปนั่ง = ผ่านโซฟาได้
     for (const [id, other] of avatars) {
       if (id === myId || other.sit !== null) continue;
       const ox = nx - other.pos.x;
@@ -432,8 +502,44 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
         nz += (oz / od) * (PERSONAL_SPACE - od) * 0.5;
       }
     }
-    entry.pos.x = clampX(nx);
-    entry.pos.z = clampZ(nz);
+    nx = clampX(nx);
+    nz = clampZ(nz);
+    if (blockedAt(nx, nz, entry.pos.y, stepOf(entry))) return; // โดนต้นไม้/คนอื่นดันเข้าผนัง → อยู่ที่เดิม
+    entry.pos.x = nx;
+    entry.pos.z = nz;
+  }
+
+  // แรงโน้มถ่วง + ยืนบนพื้นที่สูงที่สุดใต้เท้า · เดินขึ้นขั้นเตี้ย = ยกตัวขึ้นทันที (ภาพค่อยๆ ยกใน viewY)
+  function updateVertical(entry, dt, now) {
+    if (entry.sit !== null) {
+      entry.vy = 0;
+      entry.pos.y = 0;
+      entry.groundedAt = now;
+      entry.grounded = true;
+      return;
+    }
+    const floorY = supportAt(entry.pos.x, entry.pos.z);
+    entry.vy -= GRAVITY * dt;
+    entry.pos.y += entry.vy * dt;
+    entry.grounded = entry.pos.y <= floorY;
+    if (entry.grounded) {
+      entry.pos.y = floorY;
+      entry.vy = 0;
+      entry.groundedAt = now;
+    }
+  }
+
+  // แตะให้เดินไปแต่ติดหน้าผา/ต้นไม้นานเกิน → เลิก
+  function checkStuck(entry, moved, now) {
+    if (!walkTo || moved > 0.3) {
+      entry.stuckSince = null;
+      return;
+    }
+    entry.stuckSince ??= now;
+    if (now - entry.stuckSince < STUCK_MS) return;
+    walkTo = null;
+    entry.stuckSince = null;
+    onNotice('ไปตรงนั้นไม่ได้ ลองกระโดด (Space) หรือหาทางอ้อม');
   }
 
   function updateMe(dt) {
@@ -456,10 +562,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const moved = Math.hypot(entry.pos.x - prevX, entry.pos.z - prevZ) / Math.max(dt, 0.001);
     entry.speed = Math.min(sp, moved + 0.4) / WALK_SPEED;
     if (sp > 0.25) entry.ry = angleLerp(entry.ry, Math.atan2(vel.x, vel.z), 1 - Math.exp(-dt * 12));
+    const now = performance.now();
+    updateVertical(entry, dt, now);
+    checkStuck(entry, moved, now);
 
     marker.visible = Boolean(walkTo) && walkTo.seat === undefined;
     if (marker.visible) {
-      marker.position.set(walkTo.x, 0.03, walkTo.z);
+      marker.position.set(walkTo.x, groundAt(walkTo.x, walkTo.z) + 0.03, walkTo.z);
       marker.scale.setScalar(1 + Math.sin(performance.now() / 180) * 0.1);
     }
   }
@@ -469,11 +578,12 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const k = 1 - Math.exp(-dt * 10);
     for (const [id, entry] of avatars) {
       if (id === myId) continue;
-      const { x, z, ry } = entry.target;
+      const { x, y, z, ry } = entry.target;
       const dist = Math.hypot(x - entry.pos.x, z - entry.pos.z);
-      if (dist > SNAP_DIST) entry.pos.set(x, 0, z);
+      if (dist > SNAP_DIST || Math.abs(y - entry.pos.y) > SNAP_DIST) entry.pos.set(x, y, z);
       else {
         entry.pos.x += (x - entry.pos.x) * k;
+        entry.pos.y += (y - entry.pos.y) * k;
         entry.pos.z += (z - entry.pos.z) * k;
       }
       entry.ry = angleLerp(entry.ry, ry, k);
@@ -483,34 +593,45 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     }
   }
 
-  // ---------- กล้องตามตัวเรา ----------
+  // ---------- กล้องตามตัวเรา (หมุนรอบตัวได้ด้วยคลิกขวาลาก) ----------
   const focus = new THREE.Vector3(0, 0, 1);
-  const camOffset = new THREE.Vector3();
+  const lookAt = new THREE.Vector3();
   function cameraGoal() {
     const entry = me();
-    return entry ? [entry.pos.x, entry.pos.z] : [0, 1];
+    return entry ? [entry.pos.x, entry.viewY, entry.pos.z] : [0, 0, 1];
   }
   function placeCamera() {
     // จอแคบ (มือถือ) → ถอยกล้องให้เห็นรอบตัวกว้างขึ้น
-    const far = (camera.aspect < 1 ? 1.45 : 1) * zoom;
-    camOffset.set(0, 12 * far, 8.5 * far); // มุมก้มชัน (~55°) → ต้นไม้บังตัวละครน้อย
-    // มองเลยตัวละครไปทางเวทีนิดนึง (ตัวละครอยู่ต่ำกว่ากลางจอ) → จอ MV ไม่หลุดขอบบนง่ายตอนยืนบนฟลอร์/ซูมเข้า
-    camera.position.copy(focus).add(camOffset);
-    camera.position.z -= LOOK_AHEAD;
-    camera.lookAt(focus.x, 0.6, focus.z - LOOK_AHEAD);
-    sun.position.set(focus.x + 8, 18, focus.z + 10);
-    sun.target.position.set(focus.x, 0, focus.z);
+    const dist = CAM_DIST * (camera.aspect < 1 ? 1.45 : 1) * zoom;
+    const fx = -Math.sin(camYaw); // ทิศที่กล้องหันไปบนพื้น (yaw 0 = มองไปทางเวที -z)
+    const fz = -Math.cos(camYaw);
+    // มองเลยตัวละครไปข้างหน้านิดนึง (ตัวละครอยู่ต่ำกว่ากลางจอ) → จอ MV ไม่หลุดขอบบนง่ายตอนยืนบนฟลอร์/ซูมเข้า
+    lookAt.set(focus.x + fx * LOOK_AHEAD, focus.y + 0.6, focus.z + fz * LOOK_AHEAD);
+    const flat = Math.cos(camPitch) * dist;
+    camera.position.set(lookAt.x - fx * flat, lookAt.y + Math.sin(camPitch) * dist, lookAt.z - fz * flat);
+    // กล้องก้มต่ำแล้วมุดเข้าภูเขาข้างหลัง → ยกกล้องขึ้นเหนือพื้นตรงนั้น
+    const under = supportAt(camera.position.x, camera.position.z, 0.5) + CAM_CLEARANCE;
+    if (camera.position.y < under) camera.position.y = under;
+    camera.lookAt(lookAt);
+    sun.position.set(focus.x + 8, focus.y + 18, focus.z + 10);
+    sun.target.position.set(focus.x, focus.y, focus.z);
   }
   function snapCamera() {
-    const [x, z] = cameraGoal();
-    focus.set(x, 0, z);
+    const [x, y, z] = cameraGoal();
+    focus.set(x, y, z);
     placeCamera();
   }
   function followCamera(dt) {
-    const [x, z] = cameraGoal();
+    const [x, y, z] = cameraGoal();
     const k = 1 - Math.exp(-dt * 4);
     focus.x += (x - focus.x) * k;
+    focus.y += (y - focus.y) * (1 - Math.exp(-dt * 3)); // กระโดดแล้วกล้องไม่เด้งตามแรงๆ
     focus.z += (z - focus.z) * k;
+    placeCamera();
+  }
+  function resetView() {
+    camYaw = 0;
+    camPitch = PITCH_DEFAULT;
     placeCamera();
   }
 
@@ -518,7 +639,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const headPoint = new THREE.Vector3();
   function placeTags(width, height) {
     for (const entry of avatars.values()) {
-      headPoint.set(entry.pos.x, HEAD_TOP + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z).project(camera);
+      headPoint.set(entry.pos.x, entry.viewY + HEAD_TOP + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z).project(camera);
       const visible = headPoint.z < 1 && Math.abs(headPoint.x) < 1.1 && Math.abs(headPoint.y) < 1.1;
       entry.tag.node.style.visibility = visible ? 'visible' : 'hidden';
       if (!visible) continue;
@@ -529,17 +650,44 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     }
   }
 
+  let quality = Math.max(0, QUALITY.findIndex((q) => q.label === localStorage.getItem(QUALITY_KEY)));
+  if (localStorage.getItem(QUALITY_KEY) === null) quality = 1; // ค่าเริ่มต้น = คม (Man ขอเพิ่มความละเอียด 11-27)
   function fitCamera() {
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
-    // ความละเอียดต่ำแล้วให้ CSS ขยายแบบ pixelated (ดู .lounge-view canvas)
-    renderer.setPixelRatio(Math.min(1, PIXEL_HEIGHT / h));
+    // ความละเอียดต่ำแล้วให้ CSS ขยายแบบ pixelated (ดู .lounge-view canvas) · คมสุด = ตามจอจริง (จอ retina ไม่เกิน 2 เท่า)
+    renderer.setPixelRatio(Math.min(Math.min(devicePixelRatio, 2), QUALITY[quality].height / h));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     placeCamera();
   }
   new ResizeObserver(fitCamera).observe(container);
+  function cycleQuality() {
+    quality = (quality + 1) % QUALITY.length;
+    localStorage.setItem(QUALITY_KEY, QUALITY[quality].label);
+    fitCamera();
+    onNotice(`ความละเอียด: ${QUALITY[quality].label}`);
+  }
+
+  // ---------- ตัวนับ FPS (กด P เปิด/ปิด) ----------
+  const fpsTag = document.createElement('div');
+  fpsTag.className = 'lounge-fps';
+  fpsTag.hidden = true;
+  container.append(fpsTag);
+  let fpsFrames = 0;
+  let fpsSince = performance.now();
+  function tickFps(now) {
+    fpsFrames += 1;
+    if (now - fpsSince < 500) return;
+    if (!fpsTag.hidden) fpsTag.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsSince))} FPS · ${QUALITY[quality].label}`;
+    fpsFrames = 0;
+    fpsSince = now;
+  }
+  const toggleFps = () => {
+    fpsTag.hidden = !fpsTag.hidden;
+    fpsTag.textContent = '… FPS';
+  };
 
   let visible = true;
   let onScreen = true; // เห็นลานเกินครึ่งเมื่อไหร่ ปุ่มลูกศร/Space ถึงเป็นของตัวละคร (ไม่งั้นปล่อยให้เลื่อนหน้าได้ตามปกติ)
@@ -591,6 +739,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
   function reportScreen() {
     if (!onScreenQuad) return;
+    if (camera.position.z <= MV.z + 0.05) return emitQuad(null); // หมุนกล้องไปหลังเวที = เห็นหลังจอ ไม่ต้องโชว์วิดีโอ
     const w = container.clientWidth;
     const h = container.clientHeight;
     const quad = [];
@@ -602,11 +751,71 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     emitQuad(quad);
   }
 
+  // ---------- สถานะการเคลื่อนไหว → ท่าทาง + ฝุ่น (คิดจากตำแหน่งที่เห็น ใช้ได้ทั้งตัวเราและคนอื่น ไม่ต้องส่งผ่าน server) ----------
+  const RUN_DUST_SPEED = 1.3; // speed เทียบเดิน (วิ่ง ≈ 1.7)
+  const RUN_DUST_EVERY = 0.085;
+  // สีฝุ่นตามพื้น: ทราย/ทางเดิน = เหลืองนวล · หิมะ = ขาว · หญ้า = เขียวอ่อนปนดิน
+  function dustColor(x, z) {
+    const { level, kind } = cellAt(Math.floor(x), Math.floor(z));
+    if (kind === 'mesa') return 0xe4a672;
+    if (level >= 8) return 0xffffff;
+    if (level >= 5 || kind === 'pillar') return 0xc0cbdc;
+    return 0xcbd9a0;
+  }
+  function trackMotion(entry, dt, seated) {
+    const step = Math.max(dt, 1e-3);
+    const prevY = entry.prevViewY ?? entry.viewY;
+    entry.prevViewY = entry.viewY;
+    // ความเร็วแนวดิ่งจากภาพจริง (ตัวคนอื่นไม่มี vy ส่งมา) · เฉลี่ยกันกระตุกจากแพ็กเก็ต
+    entry.vyEst = (entry.vyEst ?? 0) + ((entry.viewY - prevY) / step - (entry.vyEst ?? 0)) * (1 - Math.exp(-dt * 14));
+    // เลี้ยวเร็วแค่ไหน → เอียงตัวเข้าโค้ง
+    const prevRy = entry.prevRy ?? entry.ry;
+    entry.prevRy = entry.ry;
+    const turn = Math.atan2(Math.sin(entry.ry - prevRy), Math.cos(entry.ry - prevRy)) / step;
+    entry.turn = (entry.turn ?? 0) + (turn - (entry.turn ?? 0)) * (1 - Math.exp(-dt * 8));
+
+    const ground = supportAt(entry.pos.x, entry.pos.z);
+    const airborne = !seated && entry.viewY > ground + 0.08;
+    const { x, z } = entry.pos;
+    const hex = dustColor(x, z);
+    const back = { bx: -Math.sin(entry.ry), bz: -Math.cos(entry.ry) };
+    if (entry.wasAir && !airborne) {
+      const impact = Math.max(0, -(entry.lastAirVy ?? 0));
+      entry.av.land(Math.min(1, impact / 9)); // ย่อเข่ารับแรง ตกสูงยิ่งย่อลึก
+      if (impact > 2.5) fx.puff(x, ground, z, { n: Math.min(12, 4 + Math.round(impact)), spread: 2.2, up: 0.8, hex });
+    } else if (!entry.wasAir && airborne && entry.vyEst > 2) {
+      fx.puff(x, ground, z, { n: 4, spread: 1.4, up: 0.6, hex }); // ออกตัวกระโดด
+    }
+    if (airborne) entry.lastAirVy = entry.vyEst;
+    entry.wasAir = airborne;
+
+    // วิ่งบนพื้น → ฝุ่นฟุ้งจากเท้าไปทางหลังเป็นจังหวะ
+    entry.dustIn = (entry.dustIn ?? 0) - dt;
+    if (!airborne && !seated && entry.speed > RUN_DUST_SPEED && entry.dustIn <= 0) {
+      entry.dustIn = RUN_DUST_EVERY;
+      fx.puff(x + back.bx * 0.25, ground, z + back.bz * 0.25, { n: 1 + (Math.random() < 0.4 ? 1 : 0), spread: 0.6, up: 1.1, hex, ...back, back: 1.4, size: 1.1 });
+    }
+    return {
+      air: airborne ? Math.max(-1, Math.min(1, entry.vyEst / 7)) : null, // +1 = พุ่งขึ้น · -1 = ร่วงลง
+      lean: Math.max(-1, Math.min(1, entry.turn / 8)),
+    };
+  }
+
+  // วิ่ง → มุมกล้องกว้างขึ้นนิดนึง (รู้สึกเร็ว) · หยุดแล้วค่อยๆ คืน
+  function kickFov(dt) {
+    const running = (me()?.speed ?? 0) > RUN_DUST_SPEED && me()?.grounded;
+    const want = BASE_FOV + (running && !reducedMotion.matches ? RUN_FOV_KICK : 0);
+    if (Math.abs(camera.fov - want) < 0.01) return;
+    camera.fov += (want - camera.fov) * (1 - Math.exp(-dt * 5));
+    camera.updateProjectionMatrix();
+  }
+
   let last = performance.now();
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    tickFps(now);
     animateMusic(now);
     updateMe(dt);
     sendPose(now);
@@ -616,14 +825,20 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     for (const entry of avatars.values()) {
       const seated = entry.sit !== null;
       if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
-      entry.av.root.position.set(entry.pos.x, (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z);
+      // ก้าวขึ้นขั้นเตี้ย (pos.y กระโดดทีละ 0.5) → ภาพไล่ตามเร็วๆ · ลอย/ตก = ตามจริงทันที
+      const rising = entry.pos.y > entry.viewY && entry.pos.y - entry.viewY < 0.6 && entry.vy === 0;
+      entry.viewY = rising ? entry.viewY + (entry.pos.y - entry.viewY) * (1 - Math.exp(-dt * 20)) : entry.pos.y;
+      entry.av.root.position.set(entry.pos.x, entry.viewY + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z);
       entry.av.root.rotation.y = entry.ry;
       // ยืนนิ่งบนฟลอร์ตอนเพลงเล่น → โยกตามจังหวะ (ทุกเครื่องคิดเองจากตำแหน่ง ไม่ต้องส่งผ่าน server)
       const groove = music && !seated && entry.speed < 0.15 && onDanceFloor(entry.pos.x, entry.pos.z) ? beats : null;
       entry.dancing = groove !== null;
-      entry.av.update(dt, { speed: entry.speed, seated, groove });
+      const motion = trackMotion(entry, dt, seated);
+      entry.av.update(dt, { speed: entry.speed, seated, groove, ...motion });
     }
+    fx.update(dt);
     animateGround(now);
+    kickFov(dt);
     followCamera(dt);
     renderer.render(scene, camera);
     placeTags(container.clientWidth, container.clientHeight);
@@ -646,7 +861,38 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const [a, b] = [...touches.values()];
     return Math.hypot(a.x - b.x, a.y - b.y);
   };
+  // ---------- หมุนกล้อง: คลิกขวา (หรือปุ่มกลาง) ค้างแล้วลาก · R = กลับมุมเดิม ----------
+  let orbit = null; // { id, x, y }
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // ไม่ให้เมนูคลิกขวาเด้งทับตอนหมุน
   canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || (e.button !== 2 && e.button !== 1)) return;
+    e.preventDefault();
+    orbit = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    try {
+      canvas.setPointerCapture(e.pointerId); // ลากออกนอกลานก็ยังหมุนต่อ
+    } catch {
+      // pointer หายไปก่อน (เช่น ปล่อยเมาส์เร็วมาก) → หมุนได้เฉพาะในกรอบลาน ไม่เป็นไร
+    }
+    canvas.classList.add('is-orbiting');
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (orbit?.id !== e.pointerId) return;
+    camYaw -= (e.clientX - orbit.x) * ORBIT_SPEED;
+    camPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, camPitch + (e.clientY - orbit.y) * ORBIT_SPEED));
+    orbit.x = e.clientX;
+    orbit.y = e.clientY;
+    placeCamera();
+  });
+  const endOrbit = (e) => {
+    if (orbit?.id !== e.pointerId) return;
+    orbit = null;
+    canvas.classList.remove('is-orbiting');
+  };
+  canvas.addEventListener('pointerup', endOrbit);
+  canvas.addEventListener('pointercancel', endOrbit);
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return; // ถ่างนิ้วซูม = จอสัมผัสเท่านั้น
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) pinchFrom = { dist: pinchDist(), zoom };
   });
@@ -669,7 +915,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let downAt = null;
-  canvas.addEventListener('pointerdown', (e) => (downAt = { x: e.clientX, y: e.clientY }));
+  canvas.addEventListener('pointerdown', (e) => (downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null));
   canvas.addEventListener('pointerup', (e) => {
     if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 8 || !me()) return;
     downAt = null;
@@ -684,7 +930,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       walkTo = { x: SEATS[index].x, z: SEATS[index].z, seat: index };
       return;
     }
-    const floorHit = raycaster.intersectObject(floor)[0];
+    const floorHit = raycaster.intersectObjects(floor)[0]; // บล็อกพื้น/ภูเขาทุกชั้น → แตะยอดเขาก็เดินไปได้
     if (floorHit) walkTo = { x: clampX(floorHit.point.x), z: clampZ(floorHit.point.z) };
   });
 
@@ -702,6 +948,9 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     NumpadAdd: zoomIn,
     Minus: zoomOut,
     NumpadSubtract: zoomOut,
+    KeyR: resetView,
+    KeyV: cycleQuality,
+    KeyP: toggleFps,
   };
   const isTyping = (t) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   const ownsArrows = (t) => t instanceof HTMLElement && Boolean(t.closest('[role="tablist"], [role="radiogroup"]'));
@@ -741,7 +990,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   return {
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
-    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
+    debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), y: +e.pos.y.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
     debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
     reset(list, you, items = []) {
@@ -753,10 +1002,10 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     },
     add,
     remove,
-    pose({ id, x, z, ry, sit }) {
+    pose({ id, x, y, z, ry, sit }) {
       const entry = avatars.get(id);
       if (!entry || id === myId) return;
-      entry.target = { x, z, ry };
+      entry.target = { x, y: Number.isFinite(y) ? y : supportAt(x, z), z, ry };
       entry.sit = sit ?? null;
     },
     look(id, look) {
@@ -794,5 +1043,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     zoomBy(step) {
       setZoom(zoom * step);
     },
+    resetView,
+    // ใช้ตอน ?debug=1 / ทดสอบ: ดูมุมกล้องปัจจุบัน
+    debugCamera: () => ({ yaw: +camYaw.toFixed(3), pitch: +camPitch.toFixed(3), y: +camera.position.y.toFixed(2) }),
   };
 }
