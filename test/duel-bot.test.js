@@ -1,0 +1,146 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { blockedLine, BOT_LEVELS, isBotId, preferredRange, startBotMatch, tickBot } from '../server/duel-bot.js';
+import { attack, createArena, joinQueue, stepDuel } from '../server/duel.js';
+import { COUNTDOWN_MS, inPillar } from '../public/arena-rules.js';
+
+// สุ่มแบบกำหนดผลได้ เพื่อให้ test ซ้ำแล้วได้ผลเดิม
+function seeded(seed = 7) {
+  let s = seed;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+}
+
+const LOOK = { body: 0, skin: 0, hat: 0, face: 0, back: 0, outfit: 0 };
+
+// เดินเวลาแมตช์ไปเรื่อยๆ (บอทก่อน แล้วค่อยตัดสินดาเมจ เหมือน index.js)
+function run(arena, from, ms, onTick) {
+  let now = from;
+  for (let t = 0; t < ms && arena.match; t += 50) {
+    now += 50;
+    onTick?.(now);
+    tickBot(arena, now, 0.05);
+    stepDuel(arena, now, 0.05);
+  }
+  return now;
+}
+
+test('เริ่มแมตช์ NPC ได้ตอนลานว่าง · มีบอทเป็นผู้เล่นคนที่ 2 พร้อมชุด', () => {
+  const arena = createArena();
+  const res = startBotMatch(arena, 'a', 'Man', 'normal', 0, LOOK, seeded());
+  assert.ok(res.match);
+  const [, botId] = res.match.order;
+  assert.ok(isBotId(botId));
+  assert.equal(res.match.fighters[botId].name, BOT_LEVELS.normal.name);
+  assert.deepEqual(res.match.fighters[botId].look, LOOK);
+});
+
+test('ลานไม่ว่าง หรือระดับผิด → เริ่ม NPC ไม่ได้', () => {
+  const arena = createArena();
+  joinQueue(arena, 'a', 'A', 0);
+  joinQueue(arena, 'b', 'B', 0);
+  assert.ok(startBotMatch(arena, 'c', 'C', 'easy', 0, LOOK).error);
+  assert.ok(startBotMatch(createArena(), 'c', 'C', 'god', 0, LOOK).error);
+});
+
+test('คนที่ต่อคิวหาคู่อยู่ ไปสู้ NPC → ออกจากคิวก่อน', () => {
+  const arena = createArena();
+  joinQueue(arena, 'a', 'A', 0);
+  startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK);
+  assert.equal(arena.queue.length, 0);
+});
+
+test('ช่วงนับถอยหลัง บอทไม่เดิน ไม่ตี', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded());
+  const before = { ...match.fighters[match.botId].pose };
+  for (let now = 50; now < COUNTDOWN_MS - 100; now += 50) tickBot(arena, now, 0.05);
+  const after = match.fighters[match.botId].pose;
+  assert.equal(after.x, before.x);
+  assert.equal(after.z, before.z);
+  assert.equal(match.pending.length, 0);
+});
+
+test('บอทไปเก็บอาวุธก่อน แล้วตีคนที่ยืนนิ่งจนเลือดลด', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(3));
+  run(arena, 0, COUNTDOWN_MS + 20000);
+  assert.notEqual(match.fighters[match.botId].weapon, 'fists');
+  assert.ok(match.fighters.a.hp < 100, `เลือดคนยังเต็ม ${match.fighters.a.hp}`);
+});
+
+test('ระดับยากชนะคนที่ยืนเฉยได้ภายในเวลา · ไม่นับสถิติชนะ', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded(11));
+  run(arena, 0, COUNTDOWN_MS + 90000);
+  assert.equal(match.winner, BOT_LEVELS.hard.name);
+  assert.equal(arena.wins.size, 0);
+});
+
+test('บอทไม่เดินทะลุเสา ไม่ออกนอกลาน', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded(5));
+  run(arena, 0, COUNTDOWN_MS + 15000, () => {
+    const p = match.fighters[match.botId].pose;
+    assert.ok(!inPillar(p.x, p.z, 0.3), `อยู่ในเสา ${p.x},${p.z}`);
+    assert.ok(Math.abs(p.x) <= 9 && Math.abs(p.z) <= 9);
+  });
+});
+
+test('บอทระดับยากหลบค้อนที่ง้างใส่ได้บ่อยกว่าระดับง่าย', () => {
+  // วางคนถือค้อนหน้าบอท ง้างทุกครั้งที่พร้อม นับว่าโดนกี่ที
+  const hitsFor = (level) => {
+    const arena = createArena();
+    const { match } = startBotMatch(arena, 'a', 'A', level, 0, LOOK, seeded(9));
+    const me = match.fighters.a;
+    const bot = match.fighters[match.botId];
+    me.weapon = 'hammer';
+    match.weapons = []; // บอทใช้มือเปล่า ไม่วิ่งไปเก็บอาวุธ
+    let hits = 0;
+    let lastHp = bot.hp;
+    run(arena, 0, COUNTDOWN_MS + 30000, (now) => {
+      me.pose.x = bot.pose.x;
+      me.pose.z = bot.pose.z - 1.5;
+      me.pose.ry = 0;
+      if (match.phase === 'fight') attack(match, 'a', 0, now);
+      if (bot.hp < lastHp) hits += 1;
+      lastHp = bot.hp;
+      bot.hp = Math.max(bot.hp, 50); // ไม่ให้จบก่อนนับครบ
+    });
+    return hits;
+  };
+  assert.ok(hitsFor('hard') < hitsFor('easy'));
+});
+
+test('เสาบังแนวยิง', () => {
+  assert.equal(blockedLine({ x: -6, z: 4.5 }, { x: -2, z: 4.5 }), true);
+  assert.equal(blockedLine({ x: 0, z: -6 }, { x: 0, z: 6 }), false);
+});
+
+test('ระยะที่บอทชอบ: ยิงไกลยืนห่าง ประชิดเข้าใกล้', () => {
+  assert.ok(preferredRange('bow') > 5);
+  assert.ok(preferredRange('dagger') < 1.5);
+  assert.ok(preferredRange('spear') > preferredRange('sword'));
+});
+
+test('โหมดลองอาวุธ: หุ่นไม่เดิน ไม่ตี เลือดหมดแล้วฟื้น ไม่จบแมตช์ ไม่หมดเวลา', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'dummy', 0, LOOK, seeded());
+  assert.equal(match.practice, true);
+  const dummy = match.fighters[match.botId];
+  const start = { ...dummy.pose };
+  const me = match.fighters.a;
+  me.weapon = 'hammer';
+  run(arena, 0, COUNTDOWN_MS + 200000, (now) => {
+    me.pose.x = dummy.pose.x;
+    me.pose.z = dummy.pose.z - 1.5;
+    if (match.phase === 'fight') attack(match, 'a', 0, now);
+  });
+  assert.equal(match.phase, 'fight');
+  assert.equal(me.hp, 100);
+  assert.ok(dummy.hp > 0);
+  assert.equal(dummy.pose.x, start.x);
+  assert.equal(arena.wins.size, 0);
+});

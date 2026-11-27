@@ -8,6 +8,7 @@ import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
 import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
 import { AIR_STEP, blockedAt, cellAt, groundAt, STEP_UP, supportAt } from './lounge-terrain.js';
 import { createFx } from './lounge-fx.js';
+import { createDuel } from './lounge-duel.js';
 
 const WALK_SPEED = 3;
 const RUN_SPEED = 5.2; // กด Shift ค้าง
@@ -158,7 +159,7 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelPick }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -179,6 +180,15 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const { floor, seatHits, speakers, blocks, floorLights } = buildWorld(scene);
   const drawScreen = buildScreen(scene);
   const fx = createFx(scene);
+  // พื้นที่ตัวเราเดินอยู่: ลานฟังเพลง (ภูเขา/บันได) หรือลานประลอง (พื้นเรียบ + เสา) · ฟิสิกส์/กล้องเรียกผ่าน land เสมอ
+  const LOUNGE_LAND = {
+    clampX, clampZ, supportAt, groundAt, blockedAt,
+    push: (x, z, y) => pushOutOfBlocks(blocks, x, z, y),
+    dust: null, // null = ดูสีจากชนิดพื้น (dustColor)
+  };
+  let land = LOUNGE_LAND;
+  let duel = null; // สร้างหลังฟังก์ชันคุมตัวละครพร้อมแล้ว (ด้านล่าง)
+  let shakeT = 0; // กล้องสั่นตอนโดนตี (วินาทีที่เหลือ)
   let music = false;
   let screenTitle = null;
   let mvOn = false; // ตัวเล่น YouTube วางทับจอเวทีอยู่ไหม (app.js บอกผ่าน setMv)
@@ -286,7 +296,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   // เดินทับของ → บอก server (server เช็คระยะเองอีกที)
   function checkPickup(now) {
     const entry = me();
-    if (!entry || entry.sit !== null) return;
+    if (!entry || entry.sit !== null || duel?.inArena()) return; // อยู่ในลานประลอง = ของลานฟังเพลงไม่เกี่ยว
     for (const [id, item] of ground) {
       const dist = Math.hypot(item.x - entry.pos.x, item.z - entry.pos.z);
       if (ignoreUntilAway.has(id)) {
@@ -327,12 +337,25 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function sendPose(now, force = false) {
     const entry = me();
     if (!entry || (!force && now - lastSendAt < POSE_SEND_MS)) return;
+    if (duel?.inArena()) return sendDuelPose(entry, now);
     const pose = poseOf(entry);
     const key = `${pose.x.toFixed(2)},${pose.y.toFixed(2)},${pose.z.toFixed(2)},${pose.ry.toFixed(2)},${pose.sit}`;
     if (key === lastSent) return;
     lastSent = key;
     lastSendAt = now;
     onPose(pose);
+  }
+
+  // ในลานประลอง: ส่งพิกัดในลาน (server ส่งต่อให้คู่ต่อสู้คนเดียว)
+  let lastDuelSent = '';
+  function sendDuelPose(entry, now) {
+    const { x, z } = duel.toLocal(entry.pos.x, entry.pos.z);
+    const pose = { x, y: entry.pos.y, z, ry: entry.ry };
+    const key = `${x.toFixed(2)},${pose.y.toFixed(2)},${z.toFixed(2)},${pose.ry.toFixed(2)}`;
+    if (key === lastDuelSent) return;
+    lastDuelSent = key;
+    lastSendAt = now;
+    onDuelPose?.(pose);
   }
 
   const seatTaken = (index) => [...avatars.entries()].some(([id, e]) => id !== myId && e.sit === index);
@@ -376,6 +399,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function toggleSit() {
     const entry = me();
     if (!entry) return;
+    if (duel?.inArena()) return duel.swap(); // E ในลานประลอง = สลับอาวุธ
     if (entry.sit !== null) return standUp();
     const best = nearestFreeSeat();
     if (!best) return onNotice('ที่นั่งเต็มหมดแล้ว');
@@ -396,6 +420,10 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function gesture(type) {
     const entry = me();
     if (!entry) return;
+    if (duel?.inArena()) {
+      if (type === 'punch') return duel.attack(); // F ในลาน = ใช้อาวุธที่ถือ (server ตัดสินว่าโดนไหม)
+      if (type !== 'jump') return; // อีโมตปิดในลาน (ไม่ให้กดผิดแล้วยืนนิ่งให้โดนตี)
+    }
     if (type === 'jump' && !jump(entry)) return;
     entry.av.play(type);
     if (EMOTES[type]) entry.tag.emote(EMOTES[type]);
@@ -460,7 +488,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (kx || kz) {
       walkTo = null;
       if (entry.sit !== null) standUp();
-      return { dx: kx, dz: kz, want: running ? RUN_SPEED : WALK_SPEED };
+      return { dx: kx, dz: kz, want: (running ? RUN_SPEED : WALK_SPEED) * (duel?.moveScale() ?? 1) };
     }
     if (!walkTo) return { dx: 0, dz: 0, want: 0 };
     if (entry.sit !== null) standUp();
@@ -483,17 +511,17 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function slideTerrain(entry, nx, nz) {
     const y = entry.pos.y;
     const step = stepOf(entry);
-    if (!blockedAt(nx, nz, y, step)) return [nx, nz];
-    if (!blockedAt(nx, entry.pos.z, y, step)) return [nx, entry.pos.z];
-    if (!blockedAt(entry.pos.x, nz, y, step)) return [entry.pos.x, nz];
+    if (!land.blockedAt(nx, nz, y, step)) return [nx, nz];
+    if (!land.blockedAt(nx, entry.pos.z, y, step)) return [nx, entry.pos.z];
+    if (!land.blockedAt(entry.pos.x, nz, y, step)) return [entry.pos.x, nz];
     return [entry.pos.x, entry.pos.z];
   }
 
   function moveBy(entry, vx, vz, dt) {
-    let [nx, nz] = slideTerrain(entry, clampX(entry.pos.x + vx * dt), clampZ(entry.pos.z + vz * dt));
-    if (walkTo?.seat === undefined) [nx, nz] = pushOutOfBlocks(blocks, nx, nz, entry.pos.y); // เดินไปนั่ง = ผ่านโซฟาได้
+    let [nx, nz] = slideTerrain(entry, land.clampX(entry.pos.x + vx * dt), land.clampZ(entry.pos.z + vz * dt));
+    if (walkTo?.seat === undefined) [nx, nz] = land.push(nx, nz, entry.pos.y); // เดินไปนั่ง = ผ่านโซฟาได้
     for (const [id, other] of avatars) {
-      if (id === myId || other.sit !== null) continue;
+      if (id === myId || other.sit !== null || duel?.hides(id)) continue;
       const ox = nx - other.pos.x;
       const oz = nz - other.pos.z;
       const od = Math.hypot(ox, oz);
@@ -502,9 +530,9 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
         nz += (oz / od) * (PERSONAL_SPACE - od) * 0.5;
       }
     }
-    nx = clampX(nx);
-    nz = clampZ(nz);
-    if (blockedAt(nx, nz, entry.pos.y, stepOf(entry))) return; // โดนต้นไม้/คนอื่นดันเข้าผนัง → อยู่ที่เดิม
+    nx = land.clampX(nx);
+    nz = land.clampZ(nz);
+    if (land.blockedAt(nx, nz, entry.pos.y, stepOf(entry))) return; // โดนต้นไม้/คนอื่นดันเข้าผนัง → อยู่ที่เดิม
     entry.pos.x = nx;
     entry.pos.z = nz;
   }
@@ -518,7 +546,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       entry.grounded = true;
       return;
     }
-    const floorY = supportAt(entry.pos.x, entry.pos.z);
+    const floorY = land.supportAt(entry.pos.x, entry.pos.z);
     entry.vy -= GRAVITY * dt;
     entry.pos.y += entry.vy * dt;
     entry.grounded = entry.pos.y <= floorY;
@@ -568,7 +596,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
     marker.visible = Boolean(walkTo) && walkTo.seat === undefined;
     if (marker.visible) {
-      marker.position.set(walkTo.x, groundAt(walkTo.x, walkTo.z) + 0.03, walkTo.z);
+      marker.position.set(walkTo.x, land.groundAt(walkTo.x, walkTo.z) + 0.03, walkTo.z);
       marker.scale.setScalar(1 + Math.sin(performance.now() / 180) * 0.1);
     }
   }
@@ -610,8 +638,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const flat = Math.cos(camPitch) * dist;
     camera.position.set(lookAt.x - fx * flat, lookAt.y + Math.sin(camPitch) * dist, lookAt.z - fz * flat);
     // กล้องก้มต่ำแล้วมุดเข้าภูเขาข้างหลัง → ยกกล้องขึ้นเหนือพื้นตรงนั้น
-    const under = supportAt(camera.position.x, camera.position.z, 0.5) + CAM_CLEARANCE;
+    const under = land.supportAt(camera.position.x, camera.position.z, 0.5) + CAM_CLEARANCE;
     if (camera.position.y < under) camera.position.y = under;
+    if (shakeT > 0) { // โดนตี/ค้อนทุบ: สั่นสั้นๆ (ปิดเองถ้าเครื่องตั้งลดการเคลื่อนไหว — เช็คก่อนเรียก)
+      const a = shakeT * 0.6;
+      camera.position.x += (Math.random() - 0.5) * a;
+      camera.position.y += (Math.random() - 0.5) * a;
+    }
     camera.lookAt(lookAt);
     sun.position.set(focus.x + 8, focus.y + 18, focus.z + 10);
     sun.target.position.set(focus.x, focus.y, focus.z);
@@ -627,6 +660,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     focus.x += (x - focus.x) * k;
     focus.y += (y - focus.y) * (1 - Math.exp(-dt * 3)); // กระโดดแล้วกล้องไม่เด้งตามแรงๆ
     focus.z += (z - focus.z) * k;
+    shakeT = Math.max(0, shakeT - dt);
     placeCamera();
   }
   function resetView() {
@@ -638,7 +672,11 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   // ---------- วาดทุกเฟรม ----------
   const headPoint = new THREE.Vector3();
   function placeTags(width, height) {
-    for (const entry of avatars.values()) {
+    for (const [id, entry] of avatars) {
+      if (duel?.hides(id)) {
+        entry.tag.node.style.visibility = 'hidden';
+        continue;
+      }
       headPoint.set(entry.pos.x, entry.viewY + HEAD_TOP + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z).project(camera);
       const visible = headPoint.z < 1 && Math.abs(headPoint.x) < 1.1 && Math.abs(headPoint.y) < 1.1;
       entry.tag.node.style.visibility = visible ? 'visible' : 'hidden';
@@ -756,6 +794,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const RUN_DUST_EVERY = 0.085;
   // สีฝุ่นตามพื้น: ทราย/ทางเดิน = เหลืองนวล · หิมะ = ขาว · หญ้า = เขียวอ่อนปนดิน
   function dustColor(x, z) {
+    if (land.dust !== null) return land.dust;
     const { level, kind } = cellAt(Math.floor(x), Math.floor(z));
     if (kind === 'mesa') return 0xe4a672;
     if (level >= 8) return 0xffffff;
@@ -774,7 +813,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const turn = Math.atan2(Math.sin(entry.ry - prevRy), Math.cos(entry.ry - prevRy)) / step;
     entry.turn = (entry.turn ?? 0) + (turn - (entry.turn ?? 0)) * (1 - Math.exp(-dt * 8));
 
-    const ground = supportAt(entry.pos.x, entry.pos.z);
+    const ground = land.supportAt(entry.pos.x, entry.pos.z);
     const airborne = !seated && entry.viewY > ground + 0.08;
     const { x, z } = entry.pos;
     const hex = dustColor(x, z);
@@ -810,6 +849,49 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     camera.updateProjectionMatrix();
   }
 
+  // ---------- ลานประลอง (รายละเอียดใน lounge-duel.js) ----------
+  duel = createDuel({
+    scene, floor, fx, camera, container, layer,
+    avatars,
+    me,
+    addAvatar: add,
+    removeAvatar: remove,
+    myId: () => myId,
+    notice: (text) => onNotice(text),
+    send: { attack: (ry) => onDuelAttack?.({ ry }), pick: (id) => onDuelPick?.(id) },
+    setLand: (next) => (land = next ?? LOUNGE_LAND),
+    stopWalking: () => (walkTo = null),
+    // ry = ทิศที่ตัวเราหัน → กล้องไปอยู่ข้างหลังตัว มองไปทางเดียวกัน (เข้าลานแล้วเห็นคู่ต่อสู้ข้างหน้า) · ไม่ส่ง = มุมเดิม
+    snapCamera: (ry) => {
+      camYaw = ry === undefined ? 0 : ry + Math.PI;
+      camPitch = PITCH_DEFAULT;
+      snapCamera();
+    },
+    sendPoseNow: () => {
+      lastSent = '';
+      lastDuelSent = '';
+      sendPose(performance.now(), true);
+    },
+    shake: (sec) => (shakeT = Math.max(shakeT, sec)),
+    // โดนตีในลาน: กระเด็นไปตามทิศที่ server คำนวณ (ชนเสาแล้วสั้นลง)
+    knockback: (kx, kz, dist) => {
+      const entry = me();
+      if (!entry) return;
+      walkTo = null;
+      entry.vel.x = entry.vel.z = 0;
+      for (const k of [1, 0.6, 0.3]) {
+        const nx = land.clampX(entry.pos.x + kx * dist * k);
+        const nz = land.clampZ(entry.pos.z + kz * dist * k);
+        if (land.blockedAt(nx, nz, entry.pos.y)) continue;
+        entry.pos.x = nx;
+        entry.pos.z = nz;
+        break;
+      }
+      entry.vy = Math.max(entry.vy, 2 + dist);
+      sendPose(performance.now(), true);
+    },
+  });
+
   let last = performance.now();
   function frame(now) {
     requestAnimationFrame(frame);
@@ -822,7 +904,10 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     checkPickup(now);
     if (!visible) return;
     updateOthers(dt);
-    for (const entry of avatars.values()) {
+    duel.tick(dt, now);
+    for (const [id, entry] of avatars) {
+      entry.av.root.visible = !duel.hides(id);
+      if (!entry.av.root.visible) continue;
       const seated = entry.sit !== null;
       if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
       // ก้าวขึ้นขั้นเตี้ย (pos.y กระโดดทีละ 0.5) → ภาพไล่ตามเร็วๆ · ลอย/ตก = ตามจริงทันที
@@ -923,7 +1008,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const rect = canvas.getBoundingClientRect();
     pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
-    const seatHit = raycaster.intersectObjects(seatHits)[0];
+    const seatHit = !duel.inArena() && raycaster.intersectObjects(seatHits)[0];
     if (seatHit) {
       const index = seatHit.object.userData.seat;
       if (seatTaken(index)) return onNotice('ที่นั่งนี้มีคนนั่งแล้ว');
@@ -931,7 +1016,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       return;
     }
     const floorHit = raycaster.intersectObjects(floor)[0]; // บล็อกพื้น/ภูเขาทุกชั้น → แตะยอดเขาก็เดินไปได้
-    if (floorHit) walkTo = { x: clampX(floorHit.point.x), z: clampZ(floorHit.point.z) };
+    if (floorHit) walkTo = { x: land.clampX(floorHit.point.x), z: land.clampZ(floorHit.point.z) };
   });
 
   // ---------- คีย์บอร์ด: รับทั้งหน้าเว็บ ไม่ต้องคลิกที่ลานก่อน ----------
@@ -991,14 +1076,38 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   return {
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
     debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), y: +e.pos.y.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
+    // ใช้ตอน ?debug=1 / ทดสอบ: ย้ายตัวเราไปจุดนั้นทันที (pane ถูกซ่อน = เฟรมช้า เดินจริงไม่ทัน)
+    debugMove: (x, z) => {
+      const entry = me();
+      if (!entry) return;
+      entry.pos.x = land.clampX(x);
+      entry.pos.z = land.clampZ(z);
+      entry.ry = Math.atan2(0, 1);
+      sendPose(performance.now(), true);
+    },
     debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
-    reset(list, you, items = []) {
+    reset(list, you, items = [], match = null) {
+      duel.close(); // ต่อใหม่ = socket ใหม่ → แมตช์เดิม (ถ้ามี) server ปรับแพ้ไปแล้ว
       for (const id of [...avatars.keys()]) remove(id);
       myId = you;
       lastSent = '';
       list.forEach(add);
       setItems(items);
+      if (match) duel.start(match); // เข้าห้องตอนมีคนประลองอยู่ → ดูแถบเลือดได้
+    },
+    // เหตุการณ์ลานประลองจาก server (app.js ส่งต่อมา)
+    duel: {
+      start: (m) => duel.start(m),
+      state: (m) => duel.state(m),
+      hit: (ev) => duel.hit(ev),
+      swing: (ev) => duel.swing(ev),
+      shot: (ev) => duel.shot(ev),
+      shotEnd: (ev) => duel.shotEnd(ev),
+      end: (ev) => duel.end(ev),
+      close: () => duel.close(),
+      pose: (ev) => duel.pose(ev),
+      inArena: () => duel.inArena(),
     },
     add,
     remove,

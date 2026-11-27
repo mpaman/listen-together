@@ -2,7 +2,8 @@
 // หน้าที่ของไฟล์นี้ = กรองข้อมูลที่ client ส่งมาให้อยู่ในกรอบ (กันส่งค่าแปลกๆ ไปพังเครื่องคนอื่น)
 
 // จำนวนตัวเลือกของแต่ละส่วน — ต้องตรงกับ public/lounge-avatar.js
-export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4 };
+// back = ของบนหลัง (ปลอกดาบ ธนู ปีก ผ้าคลุม ...) · outfit = ลายชุด (ลายขวาง แจ็กเก็ต เอี๊ยม ฮู้ด เกราะ สูท)
+export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7 };
 // ลานทั้งหมด (เวทีฟังเพลงอยู่ตรงกลาง) — ต้องตรงกับ HALF_X/HALF_Z ใน public/lounge-terrain.js
 export const ROOM_HALF_X = 24;
 export const ROOM_HALF_Z = 18;

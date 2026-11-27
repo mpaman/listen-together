@@ -8,6 +8,7 @@ import { createSyncer, currentItem, expectedPosition } from './sync.js';
 import { createQueueDrag } from './queue-drag.js';
 import { createNotifier } from './notify.js';
 import { randomLook } from './lounge-avatar.js';
+import { createPanels, isDesktop } from './lounge-panels.js';
 import { createHostLink } from './host-link.js';
 import { createLyrics } from './lyrics.js';
 import { createStageView } from './stage-view.js';
@@ -46,6 +47,7 @@ const notifier = createNotifier();
 let lounge = null; // ห้อง 3D (null = เครื่องนี้เปิด WebGL ไม่ได้ → ใช้แบบไม่มีห้อง 3D)
 let myLook = loadLook();
 let lyrics = null;
+let panels = null; // แผงวิธีเล่น / แต่งตัว / เมนูประลอง
 let stageView = null;
 let wakeLock = null;
 let mediaSession = null;
@@ -53,7 +55,8 @@ let mediaSession = null;
 function loadLook() {
   try {
     const saved = JSON.parse(localStorage.getItem(LOOK_KEY));
-    if (saved && typeof saved === 'object') return saved; // server กรองค่าซ้ำอีกชั้น
+    // server กรองค่าซ้ำอีกชั้น · ตัวที่บันทึกไว้ก่อนมีของบนหลัง/ลายชุด → สุ่มเติมส่วนที่ขาดแล้วจำไว้ (หน้าตาเดิมไม่เปลี่ยน)
+    if (saved && typeof saved === 'object') return 'back' in saved && 'outfit' in saved ? saved : saveLook({ ...randomLook(), ...saved });
   } catch {
     // ไม่มี/อ่านไม่ได้ → สุ่มใหม่
   }
@@ -90,7 +93,9 @@ function join() {
   socket.emit('join', { room: roomId, name: $('gate-name').value, look: myLook }, (res) => {
     if (res?.error) return ui.toast(res.error);
     joined = true;
-    lounge?.reset(res.avatars ?? [], res.you, res.items ?? []);
+    lounge?.reset(res.avatars ?? [], res.you, res.items ?? [], res.duel ?? null);
+    duelQueued = false;
+    renderDuelButton(res.duelQueue ?? [], Boolean(res.duel));
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
     renderUsers(res.users);
@@ -152,6 +157,85 @@ socket.on('pose', (pose) => lounge?.pose(pose));
 socket.on('gesture', ({ id, type }) => lounge?.remoteGesture(id, type));
 socket.on('items', (items) => lounge?.setItems(items));
 socket.on('avatar:held', ({ id, kind }) => lounge?.setHeld(id, kind));
+
+// ---------- ลานประลอง 1v1 ----------
+// ปุ่ม ⚔️: กด = เข้าคิว (มีคนรออยู่ = เริ่มเลย) · กดอีกที = ยกเลิก · server ตอบ { queued }
+let duelQueued = false;
+let duelWaiting = [];
+let duelBusy = false; // มีคนประลองอยู่ (กดได้ = ต่อคิวรอแมตช์ถัดไป)
+function renderDuelButton(waiting = duelWaiting, busy = duelBusy) {
+  duelWaiting = waiting;
+  duelBusy = busy;
+  const btn = document.querySelector('.lounge-actions [data-act="duel"]');
+  if (!btn) return;
+  const others = waiting.filter((name) => !(duelQueued && name === $('gate-name').value.trim())).length;
+  const label = btn.querySelector('span');
+  const fighting = Boolean(lounge?.duel.inArena());
+  if (fighting) label.textContent = 'ออกจากลาน';
+  else if (duelQueued) label.textContent = busy ? 'รอคิว… (ยกเลิก)' : 'รอคู่… (ยกเลิก)';
+  else if (others > 0 && !busy) label.textContent = `รับคำท้า (${others})`;
+  else label.textContent = busy ? 'ต่อคิวประลอง' : 'ประลอง';
+  btn.classList.toggle('is-active', duelQueued || fighting);
+  btn.classList.toggle('is-callout', !duelQueued && !fighting && others > 0 && !busy);
+  // เมนู: หัวข้อหาคู่เปลี่ยนตามสถานะ · NPC/ลองอาวุธใช้ได้เฉพาะตอนลานว่าง
+  const sub = $('duel-queue-sub');
+  if (!sub) return;
+  $('duel-queue-label').textContent = others > 0 && !busy ? `รับคำท้า (${others} คนรอ)` : busy ? 'ต่อคิวรอแมตช์ถัดไป' : 'หาคู่ (คนจริง)';
+  sub.textContent = busy ? 'มีคนประลองอยู่ จะได้ลงสนามแมตช์ถัดไป' : others > 0 ? `${waiting.join(', ')} รออยู่ กดแล้วเข้าลานเลย` : 'รอเพื่อนในห้องกดประลองด้วย แล้วเข้าลาน 1v1';
+  for (const opt of document.querySelectorAll('#duel-panel [data-duel="npc"], #duel-panel [data-duel="dummy"]')) {
+    opt.disabled = busy;
+    opt.title = busy ? 'ลานไม่ว่าง รอคนที่ประลองอยู่จบก่อน' : '';
+  }
+}
+// ปุ่มประลอง: ในลาน = ออก · รอคิวอยู่ = ยกเลิก · นอกนั้น = เปิดเมนู (หาคู่ / NPC / ลองอาวุธ)
+function onDuelButton() {
+  if (!joined) return;
+  if (!isDesktop()) return ui.toast('ลานประลองเล่นได้บนคอมเท่านั้น (ต้องใช้คีย์บอร์ด)');
+  if (lounge?.duel.inArena()) {
+    socket.emit('duel:quit');
+    return;
+  }
+  if (duelQueued) return joinDuelQueue();
+  panels.open('duel');
+}
+function joinDuelQueue() {
+  socket.emit('duel:join', null, (res) => {
+    if (res?.error) return ui.toast(res.error);
+    duelQueued = Boolean(res?.queued);
+    renderDuelButton();
+    if (duelQueued) ui.toast(duelBusy ? 'ต่อคิวแล้ว จะได้ลงสนามแมตช์ถัดไป' : 'รอคู่ประลอง… ให้เพื่อนกดปุ่มประลองด้วย');
+  });
+}
+function onDuelMenu(kind) {
+  panels.close();
+  if (kind === 'queue') return joinDuelQueue();
+  socket.emit('duel:npc', { level: kind === 'dummy' ? 'dummy' : 'normal' }, (res) => res?.error && ui.toast(res.error));
+}
+socket.on('duel:queue', (names) => {
+  const before = duelWaiting.length;
+  renderDuelButton(names);
+  // มีคนเพิ่งท้า และเราไม่ได้อยู่ในคิว → เด้งบอก
+  if (names.length > before && !duelQueued && !duelBusy) ui.toast(`⚔️ ${names[names.length - 1]} อยากประลอง! กดปุ่มประลองเพื่อรับคำท้า`);
+});
+socket.on('duel:start', (match) => {
+  if (match.fighters.some((f) => f.id === socket.id)) {
+    duelQueued = false;
+    setGameOpen(true); // โดนจับคู่ตอนปิดเกมอยู่ → เปิดลานให้เลย
+  }
+  lounge?.duel.start(match);
+  renderDuelButton(duelWaiting, true);
+});
+socket.on('duel:state', (match) => lounge?.duel.state(match));
+socket.on('duel:pose', (pose) => lounge?.duel.pose(pose));
+socket.on('duel:swing', (ev) => lounge?.duel.swing(ev));
+socket.on('duel:shot', (ev) => lounge?.duel.shot(ev));
+socket.on('duel:shotEnd', (ev) => lounge?.duel.shotEnd(ev));
+socket.on('duel:hit', (ev) => lounge?.duel.hit(ev));
+socket.on('duel:end', (ev) => lounge?.duel.end(ev));
+socket.on('duel:close', () => {
+  lounge?.duel.close();
+  renderDuelButton(duelWaiting, false);
+});
 // ถูกแย่ง host: ไม่ต้องเด้งข้อความเอง — event hostStart ของห้อง ("X แย่ง host จาก Y") เด้งให้อยู่แล้ว
 socket.on('host:kicked', () => {
   wantHost = false;
@@ -386,6 +470,9 @@ async function initLounge() {
       onPick: (id) => joined && socket.emit('item:pick', id),
       onDrop: () => joined && socket.emit('item:drop'),
       onScreenQuad: onStageQuad,
+      onDuelPose: (pose) => joined && socket.emit('duel:pose', pose),
+      onDuelAttack: (aim) => joined && socket.emit('duel:attack', aim),
+      onDuelPick: (id) => joined && socket.emit('duel:pick', id),
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {
@@ -398,13 +485,24 @@ async function initLounge() {
   }
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
   document.querySelector('.lounge-actions [data-act="drop"]').addEventListener('click', () => lounge.dropHeld());
+  document.querySelector('.lounge-actions [data-act="duel"]').addEventListener('click', onDuelButton);
+  for (const opt of document.querySelectorAll('#duel-panel [data-duel]')) opt.addEventListener('click', () => onDuelMenu(opt.dataset.duel));
+  renderDuelButton();
   for (const btn of document.querySelectorAll('.lounge-zoom [data-zoom]')) {
     btn.addEventListener('click', () => lounge.zoomBy(btn.dataset.zoom === 'in' ? 1 / 1.15 : 1.15));
   }
-  $('reroll').addEventListener('click', () => {
-    myLook = saveLook(randomLook());
+  // ส่งชุดใหม่ให้ห้องแบบหน่วงนิดนึง (กด ◀ ▶ รัวๆ ในหน้าแต่งตัวไม่ต้องส่งทุกครั้ง)
+  let lookTimer = null;
+  const applyLook = (look) => {
+    myLook = saveLook(look);
     lounge.setMyLook(myLook);
-    if (joined) socket.emit('look', myLook);
+    clearTimeout(lookTimer);
+    lookTimer = setTimeout(() => joined && socket.emit('look', myLook), 250);
+  };
+  panels = createPanels({ getLook: () => myLook, setLook: applyLook, randomLook });
+  $('reroll').addEventListener('click', () => {
+    applyLook(randomLook());
+    panels.refreshWardrobe();
   });
   $('say-form').addEventListener('submit', (e) => {
     e.preventDefault();

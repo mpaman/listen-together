@@ -3,8 +3,13 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
-import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, spawnPose } from './avatar.js';
+import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, randomLook, spawnPose } from './avatar.js';
+import { startBotMatch, tickBot } from './duel-bot.js';
 import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js';
+import {
+  attack as duelAttack, createArena, forfeit, isFighter, joinQueue, leaveQueue, pickWeapon,
+  publicMatch, queueNames, setPose as setDuelPose, stepDuel, winsOf,
+} from './duel.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
 import { createRoomState, needsAutofill, reduce } from './room.js';
 import { cooldownLeftSec, decideHostStart, HOST_GRACE_MS } from './host.js';
@@ -211,6 +216,42 @@ setInterval(() => {
 }, ITEM_TICK_MS).unref();
 const GESTURE_LIMIT_PER_SEC = 4;
 
+// ---------- ลานประลอง 1v1 ----------
+// ทุก 50 ms เดินเวลาให้ห้องที่มีแมตช์: ท่าที่ง้างเสร็จ ลูกยิง หมดเวลา แล้วกระจายผลตามประเภท
+// ลูกยิง/ตำแหน่งส่งเฉพาะสองคนในลาน (คนดูข้างนอกไม่ได้วาดลาน) · เลือด/ผลแพ้ชนะส่งทั้งห้อง (แถบเลือดคนดู)
+const DUEL_TICK_MS = 50;
+const ATTACK_LIMIT_PER_SEC = 8;
+const emitDuelQueue = (roomId, room) => io.to(roomId).emit('duel:queue', queueNames(room.arena));
+const fightersOf = (match) => match.order;
+
+function emitDuelEvents(roomId, room, events, now) {
+  for (const ev of events) {
+    const match = room.arena.match;
+    if (ev.type === 'start') {
+      io.to(roomId).emit('duel:start', publicMatch(ev.match, now));
+      emitDuelQueue(roomId, room);
+    } else if (ev.type === 'phase') io.to(roomId).emit('duel:state', publicMatch(match, now));
+    else if (ev.type === 'hit') io.to(roomId).emit('duel:hit', ev);
+    else if (ev.type === 'shot' || ev.type === 'shotEnd') io.to(fightersOf(match)).emit(`duel:${ev.type}`, ev);
+    else if (ev.type === 'end') {
+      const names = fightersOf(match).map((id) => match.fighters[id].name);
+      io.to(roomId).emit('duel:end', { winner: ev.winner, winnerId: ev.winnerId, reason: ev.reason, wins: match.brain ? {} : winsOf(room.arena, names) }); // แมตช์ NPC ไม่นับสถิติ
+    } else if (ev.type === 'close') io.to(roomId).emit('duel:close');
+    else if (ev.type === 'swing') io.to(fightersOf(match)).emit('duel:swing', ev);
+    else if (ev.type === 'state') io.to(roomId).emit('duel:state', publicMatch(match, now));
+    else if (ev.type === 'pose') io.to(fightersOf(match)).volatile.emit('duel:pose', { id: ev.id, ...ev.pose });
+  }
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of rooms) {
+    if (!room.arena.match) continue;
+    const dt = DUEL_TICK_MS / 1000;
+    emitDuelEvents(roomId, room, [...tickBot(room.arena, now, dt), ...stepDuel(room.arena, now, dt)], now);
+  }
+}, DUEL_TICK_MS).unref();
+
 function describeEvent(action, actor, seq, state) {
   const event = { seq, type: action.type, by: actor.name, bySocket: actor.socketId };
   if (action.type === 'add') event.title = action.item.title;
@@ -320,7 +361,7 @@ function getOrCreateRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
     if (rooms.size >= MAX_ROOMS) return null;
-    room = { state: createRoomState(Date.now()), users: new Map(), items: createItemState(), cleanupTimer: null, chat: [], chatSeq: 0 };
+    room = { state: createRoomState(Date.now()), users: new Map(), items: createItemState(), arena: createArena(), cleanupTimer: null, chat: [], chatSeq: 0 };
     rooms.set(roomId, room);
   }
   clearTimeout(room.cleanupTimer);
@@ -378,7 +419,8 @@ io.on('connection', (socket) => {
     const user = { name: userName, look: cleanLook(payload?.look), pose: spawnPose(), held: null };
     room.users.set(socket.id, user);
     socket.join(roomId);
-    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), items: groundList(room.items), you: socket.id });
+    const duel = room.arena.match ? publicMatch(room.arena.match, Date.now()) : null;
+    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), items: groundList(room.items), you: socket.id, duel, duelQueue: queueNames(room.arena) });
     socket.to(roomId).emit('users', userList(room));
     socket.to(roomId).emit('avatar:join', avatarOf(socket.id, user));
   });
@@ -487,9 +529,83 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('avatar:held', { id: socket.id, kind: null });
   });
 
+  // ---------- ลานประลอง ----------
+  // กดปุ่มประลอง: อยู่ในคิว = ยกเลิก · ไม่อยู่ = เข้าคิว (มีคนรออยู่ = เริ่มเลย) · ตอบ { queued } ให้ปุ่มเปลี่ยนสถานะ
+  const allowDuelPose = createPerSecondLimiter(POSE_LIMIT_PER_SEC);
+  const allowAttack = createPerSecondLimiter(ATTACK_LIMIT_PER_SEC);
+  socket.on('duel:join', (_payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const room = roomId && rooms.get(roomId);
+    if (!room || !allowGesture(Date.now())) return reply({ error: 'กดถี่ไป รอแป๊บนึง' });
+    const arena = room.arena;
+    if (leaveQueue(arena, socket.id)) {
+      emitDuelQueue(roomId, room);
+      return reply({ queued: false });
+    }
+    const now = Date.now();
+    const res = joinQueue(arena, socket.id, userName, now);
+    if (res.error) return reply(res);
+    if (res.match) emitDuelEvents(roomId, room, [{ type: 'start', match: res.match }], now);
+    else emitDuelQueue(roomId, room);
+    return reply({ queued: Boolean(res.queued) });
+  });
+
+  // ซ้อมกับ NPC (ง่าย/กลาง/ยาก) · ได้เฉพาะตอนลานว่าง
+  socket.on('duel:npc', (raw, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const room = roomId && rooms.get(roomId);
+    if (!room || !allowGesture(Date.now())) return reply({ error: 'กดถี่ไป รอแป๊บนึง' });
+    const now = Date.now();
+    const res = startBotMatch(room.arena, socket.id, userName, raw?.level, now, randomLook());
+    if (res.error) return reply(res);
+    emitDuelEvents(roomId, room, [{ type: 'start', match: res.match }], now);
+    return reply({ ok: true });
+  });
+
+  // ยอมแพ้/ออกจากลานกลางคัน → อีกฝ่ายชนะ
+  socket.on('duel:quit', () => {
+    const room = roomId && rooms.get(roomId);
+    if (!room || !isFighter(room.arena, socket.id)) return;
+    const now = Date.now();
+    emitDuelEvents(roomId, room, forfeit(room.arena, socket.id, now), now);
+  });
+
+  // ตำแหน่งในลาน (พิกัดในลาน) → ส่งต่อให้คู่ต่อสู้คนเดียว
+  socket.on('duel:pose', (raw) => {
+    const room = roomId && rooms.get(roomId);
+    const match = room?.arena.match;
+    if (!match || !allowDuelPose(Date.now())) return;
+    const pose = setDuelPose(match, socket.id, raw);
+    if (!pose) return;
+    const other = match.order.find((id) => id !== socket.id);
+    io.to(other).volatile.emit('duel:pose', { id: socket.id, ...pose });
+  });
+
+  socket.on('duel:attack', (raw) => {
+    const room = roomId && rooms.get(roomId);
+    const match = room?.arena.match;
+    const now = Date.now();
+    if (!match || !allowAttack(now)) return;
+    const swing = duelAttack(match, socket.id, raw?.ry, now);
+    if (swing) io.to(match.order).emit('duel:swing', { id: socket.id, ...swing });
+  });
+
+  socket.on('duel:pick', (rawId) => {
+    const room = roomId && rooms.get(roomId);
+    const match = room?.arena.match;
+    if (!match || !allowGesture(Date.now())) return;
+    const res = pickWeapon(match, socket.id, rawId);
+    if (res) io.to(roomId).emit('duel:state', publicMatch(match, Date.now()));
+  });
+
   socket.on('disconnect', () => {
     const room = roomId && rooms.get(roomId);
     if (!room) return;
+    const wasQueued = queueNames(room.arena).length;
+    const fighter = isFighter(room.arena, socket.id);
+    const duelEvents = forfeit(room.arena, socket.id, Date.now());
+    if (duelEvents.length) emitDuelEvents(roomId, room, duelEvents, Date.now());
+    if (!fighter && wasQueued !== queueNames(room.arena).length) emitDuelQueue(roomId, room);
     const leaving = room.users.get(socket.id);
     if (leaving && drop(room.items, leaving)) emitItems(roomId, room); // ออกไปแล้วของหล่นไว้ตรงนั้น
     room.users.delete(socket.id);

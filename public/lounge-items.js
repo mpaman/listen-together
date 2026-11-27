@@ -72,6 +72,53 @@ const BUILDERS = {
   },
 };
 
+// ---------- อาวุธในลานประลอง (ไม่ได้อยู่ใน ITEM_KINDS → ไม่เกิดในลานฟังเพลง) ----------
+Object.assign(BUILDERS, {
+  hammer(g) {
+    vox(g, 0.08, 0.7, 0.08, 0x6b3f22, 0, 0.25, 0); // ด้ามยาว
+    vox(g, 0.42, 0.26, 0.26, 0x5a6988, 0, 0.66, 0); // หัวค้อน
+    vox(g, 0.44, 0.06, 0.28, 0xfeae34, 0, 0.66, 0);
+    vox(g, 0.1, 0.08, 0.1, 0x3e2731, 0, -0.12, 0);
+  },
+  dagger(g) {
+    g.userData.dual = true; // ถือสองมือ
+    vox(g, 0.06, 0.14, 0.06, 0x3e2731, 0, 0, 0);
+    vox(g, 0.18, 0.04, 0.07, 0xfeae34, 0, 0.09, 0);
+    vox(g, 0.08, 0.3, 0.04, 0xc0cbdc, 0, 0.26, 0);
+    vox(g, 0.03, 0.3, 0.045, 0xffffff, -0.02, 0.26, 0);
+  },
+  spear(g) {
+    vox(g, 0.06, 1.3, 0.06, 0x8f563b, 0, 0.35, 0);
+    vox(g, 0.1, 0.06, 0.1, 0xfeae34, 0, 0.98, 0);
+    vox(g, 0.1, 0.22, 0.04, 0xc0cbdc, 0, 1.12, 0);
+    vox(g, 0.05, 0.1, 0.04, 0xffffff, 0, 1.27, 0);
+    vox(g, 0.08, 0.06, 0.08, 0xe43b44, 0, 0.92, 0); // พู่แดง
+  },
+  bow(g) {
+    g.userData.upright = true;
+    vox(g, 0.06, 0.3, 0.06, 0x6b3f22, 0, 0.1, 0);
+    const up = new THREE.Group();
+    up.position.set(0, 0.25, 0);
+    up.rotation.x = -0.5;
+    vox(up, 0.05, 0.36, 0.05, 0x6b3f22, 0, 0.16, 0);
+    g.add(up);
+    const down = new THREE.Group();
+    down.position.set(0, -0.05, 0);
+    down.rotation.x = 0.5;
+    vox(down, 0.05, 0.36, 0.05, 0x6b3f22, 0, -0.16, 0);
+    g.add(down);
+    vox(g, 0.015, 0.92, 0.015, 0xffffff, 0, 0.1, -0.17);
+  },
+  staff(g) {
+    vox(g, 0.06, 1.0, 0.06, 0x3e2731, 0, 0.25, 0);
+    vox(g, 0.16, 0.06, 0.16, 0xfeae34, 0, 0.76, 0);
+    g.userData.flame = [
+      vox(g, 0.18, 0.18, 0.18, 0xf77622, 0, 0.9, 0, true),
+      vox(g, 0.1, 0.1, 0.1, 0xfee761, 0, 0.92, 0, true),
+    ];
+  },
+});
+
 export function buildItem(kind) {
   const group = new THREE.Group();
   (BUILDERS[kind] ?? BUILDERS.sword)(group);

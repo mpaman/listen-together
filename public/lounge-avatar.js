@@ -3,14 +3,15 @@
 // จำนวนตัวเลือกแต่ละส่วนต้องตรงกับ LOOK_PARTS ใน server/avatar.js
 import * as THREE from 'three';
 import { animateItem, buildItem } from './lounge-items.js';
+import { buildBack, decorateOutfit, outfitColors } from './lounge-outfit.js';
 
-export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4 };
+// back = ของบนหลัง · outfit = ลายชุด (รายละเอียดอยู่ใน lounge-outfit.js)
+export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7 };
 // จานสีแนวเกมเก่า (ENDESGA 32)
-const BODY_COLORS = [0xe43b44, 0x0099db, 0x63c74d, 0xfeae34, 0xb55088, 0x2ce8f5, 0xf77622, 0x8b9bb4, 0x3e8948, 0x68386c];
-const SKIN_COLORS = ['#f6c79e', '#e4a672', '#c28569', '#b86f50', '#733e39', '#ffe0c2'];
+export const BODY_COLORS = [0xe43b44, 0x0099db, 0x63c74d, 0xfeae34, 0xb55088, 0x2ce8f5, 0xf77622, 0x8b9bb4, 0x3e8948, 0x68386c];
+export const SKIN_COLORS = ['#f6c79e', '#e4a672', '#c28569', '#b86f50', '#733e39', '#ffe0c2'];
 const HAIR_COLORS = [0x3e2731, 0x181425, 0x733e39, 0xbe4a2f, 0xfeae34, 0x262b44];
 const HAT_COLORS = [0x262b44, 0xe43b44, 0x0099db, 0xfeae34, 0xb55088];
-const PANTS = 0x3a4466;
 const SHOES = 0x181425;
 
 export const SEAT_HIP = 0.45; // ความสูงสะโพกตอนยืน (ใช้คำนวณตอนนั่ง)
@@ -127,6 +128,9 @@ function buildHat(head, kind, color) {
 
 // ท่าทางชั่วคราว: ชื่อท่า → ระยะเวลา (วินาที)
 const GESTURE_SEC = { jump: 0.8, punch: 0.4, wave: 1.6, dance: 2.4, clap: 1.4, hit: 0.7, laugh: 1.4, love: 1.4, party: 1.6, cry: 1.6, angry: 1.4 };
+// ท่าอาวุธในลานประลอง: ความยาวท่าตั้งตาม windup ของอาวุธ (play(type, sec)) ค่านี้เป็นค่าเริ่มต้น
+// ท่าแบ่งเป็น ง้าง (ช่วง windup) → ปล่อย → คืนท่า · ตัวเลข hit = สัดส่วนเวลาที่ "โดนจริง" ในท่า
+Object.assign(GESTURE_SEC, { jab: 0.3, slash: 0.45, stab: 0.5, slam: 1, shoot: 0.6, cast: 0.75, flinch: 0.3 });
 
 const pulse = (t) => Math.sin(Math.PI * Math.min(1, Math.max(0, t))); // 0 → 1 → 0
 
@@ -138,18 +142,23 @@ export function createAvatar(look) {
   let faceKey = { kind: 0, skin: SKIN_COLORS[0] };
   let heldKind = null;
 
-  function build(l) {
+  function build(raw) {
     body.clear();
-    const shirt = mat(BODY_COLORS[l.body] ?? BODY_COLORS[0]);
+    const l = { back: 0, outfit: 0, ...raw }; // look จาก client รุ่นเก่าไม่มีสองส่วนนี้
+    const shirtHex = BODY_COLORS[l.body] ?? BODY_COLORS[0];
+    const colors = outfitColors(l, shirtHex);
     const skinHex = SKIN_COLORS[l.skin] ?? SKIN_COLORS[0];
     const skin = mat(skinHex);
-    const pants = mat(PANTS);
+    const pants = mat(colors.pants);
+    const sleeve = mat(colors.sleeve);
     parts.legL = limb(body, 0.2, 0.45, 0.22, pants, -0.12, SEAT_HIP, mat(SHOES));
     parts.legR = limb(body, 0.2, 0.45, 0.22, pants, 0.12, SEAT_HIP, mat(SHOES));
-    parts.torso = block(body, 0.52, 0.58, 0.3, shirt, 0, 0.74, 0);
-    block(parts.torso, 0.53, 0.08, 0.31, mat(PANTS), 0, -0.25, 0); // เข็มขัด
-    parts.armL = limb(body, 0.16, 0.5, 0.18, shirt, -0.36, 1.0, skin);
-    parts.armR = limb(body, 0.16, 0.5, 0.18, shirt, 0.36, 1.0, skin);
+    parts.torso = block(body, 0.52, 0.58, 0.3, mat(colors.torso), 0, 0.74, 0);
+    block(parts.torso, 0.53, 0.08, 0.31, pants, 0, -0.25, 0); // เข็มขัด
+    parts.armL = limb(body, 0.16, 0.5, 0.18, sleeve, -0.36, 1.0, skin);
+    parts.armR = limb(body, 0.16, 0.5, 0.18, sleeve, 0.36, 1.0, skin);
+    decorateOutfit(parts.torso, [parts.armL, parts.armR], l, colors);
+    parts.backAnim = buildBack(parts.torso, l);
 
     // หัว: ด้านหน้า (+z) เป็นหน้าพิกเซล ด้านอื่นเป็นสีผิว
     faceKey = { kind: l.face, skin: skinHex };
@@ -169,9 +178,18 @@ export function createAvatar(look) {
   function setHeld(kind) {
     heldKind = kind ?? null;
     if (parts.held) parts.held.removeFromParent();
+    if (parts.heldL) parts.heldL.removeFromParent();
     parts.held = null;
+    parts.heldL = null;
     if (!heldKind) return;
     const item = buildItem(heldKind);
+    if (item.userData.dual) { // มีดคู่: อีกเล่มอยู่มือซ้าย
+      const left = buildItem(heldKind);
+      left.position.set(0, -0.47, 0.06);
+      left.rotation.set(Math.PI / 2, 0, 0);
+      parts.armL.add(left);
+      parts.heldL = left;
+    }
     if (item.userData.upright) {
       item.position.set(0.14, -0.42, 0.05);
       item.rotation.set(0, Math.PI / 2, 0);
@@ -200,8 +218,35 @@ export function createAvatar(look) {
     squash = Math.max(squash, 0.35 + strength * 0.65);
   }
 
-  function play(type) {
-    if (GESTURE_SEC[type]) gesture = { type, t: 0 };
+  // sec = ความยาวท่า · hitAt = วินาทีที่อาวุธโดนจริง (ท่าง้างยาวเท่านี้แล้วค่อยปล่อย)
+  function play(type, { sec, hitAt } = {}) {
+    if (!GESTURE_SEC[type]) return;
+    const dur = sec ?? GESTURE_SEC[type];
+    gesture = { type, t: 0, dur, hit: hitAt !== undefined ? Math.min(0.85, hitAt / dur) : 0.35 };
+  }
+
+  // โดนตี: ตัวกะพริบขาวแป๊บนึง (เฉพาะตัว ไม่รวมของในมือ เพราะวัสดุของในมือใช้ร่วมกันทุกตัว)
+  let flashT = 0;
+  const flashMats = () => {
+    const list = [];
+    const inHeld = (o) => {
+      for (let n = o; n; n = n.parent) if (n === parts.held || n === parts.heldL) return true;
+      return false;
+    };
+    body.traverse((o) => {
+      if (!o.isMesh || inHeld(o)) return;
+      for (const m of [o.material].flat()) if (m.emissive) list.push(m);
+    });
+    return list;
+  };
+  function flash() {
+    flashT = 0.12;
+    for (const m of flashMats()) m.emissive.setHex(0xffffff);
+  }
+  function tickFlash(dt) {
+    if (flashT <= 0) return;
+    flashT -= dt;
+    if (flashT <= 0) for (const m of flashMats()) m.emissive.setHex(0x000000);
   }
 
   function setBlink(closed) {
@@ -274,6 +319,7 @@ export function createAvatar(look) {
     parts.armL.rotation.set(-swing * 0.95 + pump - 0.3 * sitK + airArmX * airK, 0, -0.08 - sway - airArmZ * airK - squash * 0.3);
     parts.armR.rotation.set(swing * 0.95 * (1 - holding * 0.6) + pump - 0.3 * sitK - holding * 0.35 + airArmX * airK * (1 - holding * 0.5), 0, 0.08 + sway + airArmZ * airK + squash * 0.3);
     if (parts.held) animateItem(parts.held, clock);
+    parts.backAnim?.(dt, { clock, speed: move, air }); // ปีกกระพือ / ผ้าคลุมปลิว / ไฟเจ็ตแพ็ก
 
     // กะพริบตา
     blinkIn -= dt;
@@ -300,12 +346,59 @@ export function createAvatar(look) {
       parts.head.rotation.x = bounce * 0.12;
     }
 
+    tickFlash(dt);
     if (!gesture) return;
     gesture.t += dt;
-    const dur = GESTURE_SEC[gesture.type];
+    const dur = gesture.dur ?? GESTURE_SEC[gesture.type];
     const p = Math.min(gesture.t / dur, 1);
     const wave = (hz) => Math.sin(gesture.t * hz);
+    // ง้าง 0→1 จนถึงจังหวะโดน · ปล่อย 0→1 หลังจากนั้น
+    const hp = gesture.hit ?? 0.35;
+    const wind = Math.min(1, p / hp);
+    const rel = p <= hp ? 0 : (p - hp) / (1 - hp);
+    const strike = p <= hp ? 0 : Math.max(0, 1 - rel * 1.4);
     switch (gesture.type) {
+      case 'jab': // ต่อย/แทงมีดสลับมือ
+        parts.armR.rotation.set(-Math.PI / 2 * Math.max(wind * 0.3, strike + (p > hp ? 0.4 * (1 - rel) : 0)), 0, 0);
+        parts.armL.rotation.set(-0.6 * strike, 0, -0.1);
+        body.rotation.y = -0.3 * strike;
+        break;
+      case 'slash': // ดาบ: ยกขึ้นเหนือหัว แล้วฟันเฉียงลง
+        parts.armR.rotation.set(-2.8 * wind + (p > hp ? 3.3 * Math.min(1, rel * 2.5) : 0), 0, 0.3 - 0.5 * strike);
+        body.rotation.y = 0.3 * wind * (p <= hp ? 1 : 0) - 0.5 * strike;
+        body.position.z = 0.15 * strike;
+        break;
+      case 'stab': // หอก: ดึงหลัง แล้วแทงตรงไปข้างหน้า
+        parts.armR.rotation.set(-1.5, 0, 0);
+        parts.armL.rotation.set(-1.3, 0, 0.3);
+        if (parts.held) parts.held.position.y = -0.47 + 0.35 * wind * (p <= hp ? 1 : 0) - 0.45 * strike;
+        body.position.z = -0.12 * (p <= hp ? wind : 0) + 0.3 * strike;
+        body.rotation.x = 0.15 * strike;
+        if (p >= 1 && parts.held) parts.held.position.y = -0.47;
+        break;
+      case 'slam': { // ค้อน: สองมือยกสูง ตัวแอ่นไปหลัง → ทุบพื้นเต็มแรง
+        const up = p <= hp ? wind : Math.max(0, 1 - rel * 4);
+        const down = p <= hp ? 0 : Math.min(1, rel * 4) * (1 - Math.max(0, rel - 0.6) / 0.4);
+        parts.armR.rotation.set(-3 * up - 1.2 * down, 0, 0.1);
+        parts.armL.rotation.set(-3 * up - 1.2 * down, 0, -0.1);
+        body.rotation.x = -0.25 * up + 0.4 * down;
+        body.position.y -= 0.12 * down;
+        break;
+      }
+      case 'shoot': // ธนู: ยื่นแขนซ้าย ง้างสายด้วยแขนขวา แล้วปล่อย
+        parts.armR.rotation.set(-1.55, 0, 0);
+        parts.armL.rotation.set(-1.5, 0, -0.2 - 0.4 * (p <= hp ? wind : 1 - rel));
+        body.rotation.y = 0.5 * (p <= hp ? wind : 1 - rel);
+        break;
+      case 'cast': // คทา: ชูคทาขึ้น แล้วชี้ไปข้างหน้า
+        parts.armR.rotation.set(-2.6 * wind + (p > hp ? 1.2 * Math.min(1, rel * 3) : 0), 0, 0.15);
+        parts.armL.rotation.set(-1.2 * strike, 0, -0.4);
+        body.position.y += 0.06 * wind * (p <= hp ? 1 : 0);
+        break;
+      case 'flinch': // โดนตี: สะดุ้งไปหลัง
+        body.rotation.x = -0.35 * Math.sin(Math.PI * p);
+        parts.head.rotation.x = -0.3 * Math.sin(Math.PI * p);
+        break;
       case 'jump': {
         // ท่าทางตอนกระโดด: ตัวลอยจริงมาจากฟิสิกส์ใน lounge.js (root ทั้งตัวขยับ) ตรงนี้แค่พับขา/กางแขน
         // ย่อตัวเตรียม (0–15%) → ลอย (15–85%) → ลงพื้นแล้วย่อรับแรง (85–100%)
@@ -379,5 +472,6 @@ export function createAvatar(look) {
     isBusy: () => gesture !== null,
     sitAmount: () => sitK,
     land,
+    flash,
   };
 }
