@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { buildItem, animateItem } from './lounge-items.js';
 import {
-  ARENA_HALF, BLOCK_MOVE, BODY_RADIUS, clampArena, DASH_DIST, DASH_ENABLED, DASH_MS, HP_MAX, inPillar, PILLARS, POTION, RESULT_MS,
+  ARENA_HALF, ARENA_MAPS, BLOCK_MOVE, BODY_RADIUS, clampArena, DASH_DIST, DASH_ENABLED, DASH_MS, HP_MAX, inPillar, obstaclesOf, POTION, RESULT_MS,
   ROLL_DIST, ROLL_MS, STAMINA, SWAP_MS, WEAPON_KINDS, WEAPONS,
 } from './arena-rules.js';
 import { labelOf, mouseSwapped } from './keybinds.js';
@@ -32,13 +32,24 @@ const FINISH = { gap: 1.1, approachMin: 220, approachMax: 520, sec: 1.5, hitAt: 
 const toWorld = (x, z) => ({ x: x + ARENA_ORIGIN.x, z: z + ARENA_ORIGIN.z });
 const toLocal = (x, z) => ({ x: x - ARENA_ORIGIN.x, z: z - ARENA_ORIGIN.z });
 
+// สิ่งกีดขวางของแผนที่ที่กำลังสู้ (เปลี่ยนทุกแมตช์ตามที่ server สุ่ม)
+let obstacles = obstaclesOf('stone');
+
+// หน้าตาแต่ละแผนที่: สีพื้นสลับ 2 สี + วงกลาง · กำแพง · สิ่งกีดขวาง · ของบนหัวสิ่งกีดขวาง · ฝุ่นตอนวิ่ง
+// ลานหิน = ม่วงเทาเดิม · ซากปราสาท = ทรายส้ม หินทรายแตกๆ · ทุ่งหิมะ = ขาวฟ้า หินมีหิมะคลุม
+const MAP_THEMES = {
+  stone: { tiles: [0x5a6988, 0x4a5675], center: 0xb55088, wall: 0x3a4466, block: 0x8b9bb4, cap: 0xfeae34, trim: 0xfeae34, base: 0x262b44, dust: 0x8b9bb4, capStyle: 'slab' },
+  ruins: { tiles: [0xc28569, 0xb07258], center: 0xe4a672, wall: 0x8f563b, block: 0xd9a066, cap: 0xbe7d50, trim: 0x733e39, base: 0x3e2731, dust: 0xe4a672, capStyle: 'broken' },
+  snow: { tiles: [0xe8f1ff, 0xd4e3f5], center: 0x8bd3e6, wall: 0x9badb7, block: 0x6b7a99, cap: 0xffffff, trim: 0x8bd3e6, base: 0x5a6988, dust: 0xffffff, capStyle: 'snow' },
+};
+
 // พื้นดินของลาน (หน้าตาเดียวกับของลานฟังเพลง ให้ lounge.js สลับใช้แทนกันได้)
 export const ARENA_LAND = {
   clampX: (x) => ARENA_ORIGIN.x + clampArena(x - ARENA_ORIGIN.x),
   clampZ: (z) => ARENA_ORIGIN.z + clampArena(z - ARENA_ORIGIN.z),
   supportAt: () => 0,
   groundAt: () => 0,
-  blockedAt: (x, z) => inPillar(x - ARENA_ORIGIN.x, z - ARENA_ORIGIN.z, BODY_RADIUS),
+  blockedAt: (x, z) => inPillar(x - ARENA_ORIGIN.x, z - ARENA_ORIGIN.z, BODY_RADIUS, obstacles),
   push: (x, z) => [x, z],
   dust: 0x8b9bb4,
 };
@@ -46,7 +57,10 @@ export const ARENA_LAND = {
 const lambert = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
 
 // ---------- ฉากลาน ----------
-function buildArena(scene, floor) {
+function buildArena(scene, floor, map) {
+  const theme = MAP_THEMES[map] ?? MAP_THEMES.stone;
+  obstacles = obstaclesOf(map);
+  ARENA_LAND.dust = theme.dust;
   const root = new THREE.Group();
   root.position.set(ARENA_ORIGIN.x, 0, ARENA_ORIGIN.z);
   scene.add(root);
@@ -61,7 +75,7 @@ function buildArena(scene, floor) {
       m.makeTranslation(x - ARENA_HALF + 0.5, -0.1, z - ARENA_HALF + 0.5);
       tiles.setMatrixAt(i, m);
       const ring = Math.max(Math.abs(x - ARENA_HALF + 0.5), Math.abs(z - ARENA_HALF + 0.5));
-      tiles.setColorAt(i, c.setHex(ring < 2 ? 0xb55088 : (x + z) % 2 ? 0x5a6988 : 0x4a5675)); // วงกลางสีม่วง
+      tiles.setColorAt(i, c.setHex(ring < 2 ? theme.center : theme.tiles[(x + z) % 2])); // วงกลางสีเด่น
       i += 1;
     }
   }
@@ -73,8 +87,8 @@ function buildArena(scene, floor) {
   root.add(hit);
   floor.push(hit);
   // กำแพงเตี้ยรอบลาน + ฐานใต้ลาน
-  const wall = lambert(0x3a4466);
-  const trim = lambert(0xfeae34);
+  const wall = lambert(theme.wall);
+  const trim = lambert(theme.trim);
   for (const [w, d, x, z] of [[size + 1, 0.5, 0, ARENA_HALF + 0.25], [size + 1, 0.5, 0, -ARENA_HALF - 0.25], [0.5, size, ARENA_HALF + 0.25, 0], [0.5, size, -ARENA_HALF - 0.25, 0]]) {
     const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), wall);
     b.position.set(x, 0.25, z);
@@ -84,19 +98,28 @@ function buildArena(scene, floor) {
     t.position.set(x, 0.72, z);
     root.add(t);
   }
-  const base = new THREE.Mesh(new THREE.BoxGeometry(size + 6, 1, size + 6), lambert(0x262b44));
+  const base = new THREE.Mesh(new THREE.BoxGeometry(size + 6, 1, size + 6), lambert(theme.base));
   base.position.y = -0.7;
   base.receiveShadow = true;
   root.add(base);
-  // เสาหิน (ที่หลบลูกยิง) + คบไฟมุมลาน
-  for (const p of PILLARS) {
-    const pillar = new THREE.Mesh(new THREE.BoxGeometry(p.s * 2, p.h, p.s * 2), lambert(0x8b9bb4));
-    pillar.position.set(p.x, p.h / 2, p.z);
-    pillar.castShadow = pillar.receiveShadow = true;
-    root.add(pillar);
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(p.s * 2 + 0.2, 0.2, p.s * 2 + 0.2), trim);
-    cap.position.set(p.x, p.h, p.z);
-    root.add(cap);
+  // สิ่งกีดขวาง (ที่หลบลูกยิง) + ของบนหัวตามแผนที่ + คบไฟมุมลาน
+  const blockMat = lambert(theme.block);
+  const capMat = lambert(theme.cap);
+  const add = (w, h, d, mat, x, y, z) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = mesh.receiveShadow = true;
+    root.add(mesh);
+  };
+  for (const p of obstacles) {
+    add(p.sx * 2, p.h, p.sz * 2, blockMat, p.x, p.h / 2, p.z);
+    if (theme.capStyle === 'slab') add(p.sx * 2 + 0.2, 0.2, p.sz * 2 + 0.2, capMat, p.x, p.h, p.z);
+    else if (theme.capStyle === 'snow') add(p.sx * 2 + 0.1, 0.18, p.sz * 2 + 0.1, capMat, p.x, p.h + 0.02, p.z);
+    else { // ซากปราสาท: ยอดแตกเป็นก้อนเล็กไม่เท่ากัน + เศษหินตกข้างฐาน
+      add(p.sx, 0.35, p.sz, capMat, p.x - p.sx / 2, p.h + 0.17, p.z - p.sz / 2);
+      add(p.sx * 0.6, 0.6, p.sz * 0.6, blockMat, p.x + p.sx * 0.5, p.h + 0.3, p.z + p.sz * 0.4);
+      add(0.3, 0.25, 0.3, capMat, p.x + p.sx + 0.3, 0.12, p.z - p.sz * 0.3);
+    }
   }
   const flames = [];
   for (const sx of [-1, 1]) {
@@ -108,7 +131,17 @@ function buildArena(scene, floor) {
       flames.push(torch);
     }
   }
-  return { root, flames };
+  return { root, flames, map, hit };
+}
+
+// ทิ้งลานเก่า (แมตช์ใหม่ได้แผนที่ต่างไป) · คืนหน่วยความจำการ์ดจอของ geometry ที่สร้างเฉพาะลานนี้
+function disposeArena(scene, floor, arena) {
+  scene.remove(arena.root);
+  const at = floor.indexOf(arena.hit);
+  if (at >= 0) floor.splice(at, 1);
+  arena.root.traverse((o) => {
+    if (o.isMesh && !arena.flames.some((f) => f === o || f.getObjectById(o.id))) o.geometry.dispose();
+  });
 }
 
 // ---------- กล่องแถบเลือด (HTML ทับลาน) ----------
@@ -252,7 +285,11 @@ export function createDuel(ctx) {
   function enter() {
     const entry = ctx.me();
     if (!entry || inArena) return;
-    arena ??= buildArena(scene, floor);
+    if (arena && arena.map !== match.map) {
+      disposeArena(scene, floor, arena);
+      arena = null;
+    }
+    arena ??= buildArena(scene, floor, match.map);
     inArena = true;
     container.classList.add('is-dueling'); // ซ่อนคำแนะนำลานฟังเพลง (ทับกับคำแนะนำอาวุธ)
     saved = { x: entry.pos.x, y: entry.pos.y, z: entry.pos.z, ry: entry.ry, sit: entry.sit, held: entry.av.held() };
@@ -262,6 +299,7 @@ export function createDuel(ctx) {
       if (!e) continue;
       const w = toWorld(f.pose.x, f.pose.z);
       e.sit = null;
+      e.rest = null; // นั่งพื้น/นอนค้างไว้ก่อนเข้าลาน → ยืนขึ้นสู้
       e.pos.set(w.x, 0, w.z);
       e.viewY = 0;
       e.ry = f.pose.ry;
@@ -403,7 +441,7 @@ export function createDuel(ctx) {
     showBanner('READY?', 900);
     ctx.notice(next.practice
       ? `โหมดลองอาวุธ: ตีหุ่นได้เลย · กดปุ่มอาวุธด้านล่างเพื่อเปลี่ยนเป็นชิ้นไหนก็ได้ (ล็อกเมาส์อยู่ กด Esc ก่อน) · ${labelOf('heal')} ดื่มยา (ซ้อมไม่เสียขวด) · ไม่จับเวลา`
-      : `${controlsHint()} · ${labelOf('heal')} ดื่มยา (${POTION.count} ขวด)`);
+      : `ลาน${ARENA_MAPS[next.map]?.name.replace(/^ลาน/, '') ?? 'ประลอง'} · ${controlsHint()} · ${labelOf('heal')} ดื่มยา (${POTION.count} ขวด)`);
     weaponTip(myFighter()?.weapon);
   }
   // เข้าห้องตอนมีคนสู้อยู่: จำไว้เฉยๆ ไม่เด้งข้อความ

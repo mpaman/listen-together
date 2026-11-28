@@ -3,7 +3,7 @@
 // ฟังก์ชันในไฟล์นี้ไม่แตะ socket/เวลาเครื่อง: รับ now เข้ามา คืนรายการเหตุการณ์ ให้ index.js เป็นคนกระจาย
 import {
   ARENA_HALF, BLOCK_ARC, BODY_HEIGHT, BODY_RADIUS, clampArena, cleanLoadout, COUNTDOWN_MS, DASH_ENABLED, DASH_MS, FIGHT_MS, SHIELD,
-  HP_MAX, inPillar, POTION, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, STAMINA, SWAP_MS, WEAPON_KINDS, WEAPONS,
+  HP_MAX, inPillar, obstaclesOf, pickMap, POTION, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, STAMINA, SWAP_MS, WEAPON_KINDS, WEAPONS,
 } from '../public/arena-rules.js';
 
 const MAX_Y = 6; // กระโดดในลาน (พื้นเรียบ) สูงสุด ~1.3 m เผื่อไว้
@@ -14,8 +14,10 @@ const wrapAngle = (a) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 // จำกัดจำนวนไว้กัน server ทำงานหนักเกิน (ทุกแมตช์เดินทุก 50 ms)
 export const MAX_MATCHES = 8;
 
-export function createArena() {
+// map = บังคับแผนที่ทุกแมตช์ (test ใช้ให้ผลไม่สุ่ม) · ไม่ส่ง = สุ่มทุกแมตช์
+export function createArena({ map } = {}) {
   return {
+    fixedMap: map ?? null,
     queue: [],
     matches: new Map(), // id → match
     seq: 0,
@@ -85,6 +87,8 @@ export function createMatch(arena, pair, now, extra = {}) {
     winner: null,
     ...extra,
   };
+  match.map ??= arena.fixedMap ?? pickMap();
+  match.obstacles = obstaclesOf(match.map);
   arena.matches.set(match.id, match);
   return match;
 }
@@ -97,6 +101,7 @@ export function publicMatch(match, now) {
   return {
     id: match.id,
     phase: match.phase,
+    map: match.map,
     msLeft: Math.max(0, match.phaseAt + length - now),
     fighters: match.order.map((id) => {
       const f = match.fighters[id];
@@ -120,7 +125,7 @@ export function setPose(match, id, raw) {
   if (![x, z, ry].every(Number.isFinite)) return null;
   const nx = clampArena(x);
   const nz = clampArena(z);
-  if (inPillar(nx, nz, BODY_RADIUS * 0.5)) return null;
+  if (inPillar(nx, nz, BODY_RADIUS * 0.5, match.obstacles)) return null;
   f.pose = {
     x: round(nx),
     y: Number.isFinite(raw.y) ? round(Math.min(MAX_Y, Math.max(0, raw.y))) : 0,
@@ -359,7 +364,7 @@ function moveShots(match, dt, now, events) {
       if (match.phase === 'fight' && shotHits(shot, target.pose, weapon.radius)) {
         applyHit(match, shot.by, target, shot.kind, { x: shot.x - shot.vx, z: shot.z - shot.vz }, events, now);
         gone = 'hit';
-      } else if (inPillar(shot.x, shot.z, weapon.radius * 0.4)) gone = 'pillar';
+      } else if (inPillar(shot.x, shot.z, weapon.radius * 0.4, match.obstacles)) gone = 'pillar';
       else if (Math.abs(shot.x) > ARENA_HALF + 1 || Math.abs(shot.z) > ARENA_HALF + 1 || now - shot.born > weapon.life * 1000) gone = 'away';
     }
     if (gone) events.push({ type: 'shotEnd', id: shot.id, x: round(shot.x), z: round(shot.z), why: gone });

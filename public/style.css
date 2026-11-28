@@ -906,7 +906,10 @@ a.room-btn { text-decoration: none; }
 .emo[data-gesture="party"]:hover, .emo[data-gesture="clap"]:hover { color: var(--amber); }
 .act:hover, .emo:hover { background: var(--surface-2); border-color: var(--line-strong); }
 .act:active, .emo:active { transform: scale(0.9); }
-.emotes { display: flex; flex-wrap: wrap; gap: 6px; } /* อีโมตเป็นกลุ่มเดียว: ไม่พอที่ก็ขึ้นบรรทัดใหม่ทั้งกลุ่ม */
+.emotes { display: flex; flex-wrap: wrap; gap: 6px; }
+/* ท่าค้าง (นั่งพื้น/นอน/ไหว้): ค้างอยู่ = ขอบส้ม + ไอคอนสว่าง (ไม่ใช้สีอย่างเดียว · aria-pressed บอกโปรแกรมอ่านจอ) */
+.emo[aria-pressed="true"] { color: var(--text); background: var(--surface-2); border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
+.emo-sep { width: 1px; align-self: stretch; margin: 6px 2px; background: var(--line-strong); } /* อีโมตเป็นกลุ่มเดียว: ไม่พอที่ก็ขึ้นบรรทัดใหม่ทั้งกลุ่ม */
 .reroll { margin-left: auto; }
 .say-form {
   display: flex;

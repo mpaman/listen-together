@@ -486,6 +486,10 @@ async function initLounge() {
       onDuelSwap: (slot) => joined && socket.emit('duel:swap', slot),
       onDuelAct: (act) => joined && socket.emit('duel:act', act),
       onDuelPracticeWeapon: (pick) => joined && socket.emit('duel:practiceWeapon', pick),
+      // ท่าค้างเปลี่ยน (กดเอง หรือเดินแล้วเลิกเอง) → ปุ่มที่ค้างอยู่ติดสีตาม
+      onRest: (kind) => {
+        for (const btn of document.querySelectorAll('.lounge-actions [data-rest]')) btn.setAttribute('aria-pressed', String(btn.dataset.rest === kind));
+      },
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {
@@ -497,6 +501,9 @@ async function initLounge() {
     btn.addEventListener('click', () => lounge.gesture(btn.dataset.gesture));
   }
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
+  for (const btn of document.querySelectorAll('.lounge-actions [data-rest]')) {
+    btn.addEventListener('click', () => lounge.toggleRest(btn.dataset.rest));
+  }
   document.querySelector('.lounge-actions [data-act="drop"]').addEventListener('click', () => lounge.dropHeld());
   document.querySelector('.lounge-actions [data-act="duel"]').addEventListener('click', onDuelButton);
   // ปุ่มเต็มจอ (คอม): ทั้งหน้าลานเล่นเต็มจอ · อยู่ในลานประลองด้วย = ล็อกเมาส์ให้เลย

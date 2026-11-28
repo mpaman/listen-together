@@ -28,7 +28,7 @@ function run(arena, from, ms, onTick) {
 }
 
 test('เริ่มแมตช์ NPC ได้ตอนลานว่าง · มีบอทเป็นผู้เล่นคนที่ 2 พร้อมชุด', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const res = startBotMatch(arena, 'a', 'Man', 'normal', 0, LOOK, seeded());
   assert.ok(res.match);
   const [, botId] = res.match.order;
@@ -38,7 +38,7 @@ test('เริ่มแมตช์ NPC ได้ตอนลานว่าง
 });
 
 test('มีคนประลองอยู่ก็ยังสู้ NPC ได้ (หลายคนพร้อมกัน) · กำลังสู้อยู่/ระดับผิด → ไม่ได้', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0);
   joinQueue(arena, 'b', 'B', 0);
   const c = startBotMatch(arena, 'c', 'C', 'normal', 0, LOOK);
@@ -47,14 +47,14 @@ test('มีคนประลองอยู่ก็ยังสู้ NPC ไ
   assert.notEqual(c.match.botId, d.match.botId);
   assert.equal(arena.matches.size, 3);
   assert.ok(startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK).error);
-  assert.ok(startBotMatch(createArena(), 'c', 'C', 'god', 0, LOOK).error);
+  assert.ok(startBotMatch(createArena({ map: 'stone' }), 'c', 'C', 'god', 0, LOOK).error);
   // บอทแต่ละแมตช์เดินของตัวเอง · ทุกเหตุการณ์บอกว่าเป็นของแมตช์ไหน
   const events = tickBot(arena, COUNTDOWN_MS + 100, 0.05);
   assert.deepEqual(new Set(events.filter((e) => e.type === 'pose').map((e) => e.matchId)), new Set([c.match.id, d.match.id]));
 });
 
 test('ชนะ NPC = นับชนะ (ได้มงกุฎ) · ลองอาวุธไม่นับ', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK);
   stepDuel(arena, COUNTDOWN_MS);
   match.fighters[match.botId].hp = 0;
@@ -63,7 +63,7 @@ test('ชนะ NPC = นับชนะ (ได้มงกุฎ) · ลอง
 });
 
 test('แพ้ = มงกุฎหายหมด (ชนะติดกันเริ่มนับใหม่) · แพ้ NPC ก็หาย', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   arena.wins.set('A', 4);
   arena.wins.set('B', 2);
   joinQueue(arena, 'a', 'A', 0);
@@ -78,14 +78,14 @@ test('แพ้ = มงกุฎหายหมด (ชนะติดกัน
 });
 
 test('คนที่ต่อคิวหาคู่อยู่ ไปสู้ NPC → ออกจากคิวก่อน', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0);
   startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK);
   assert.equal(arena.queue.length, 0);
 });
 
 test('ช่วงนับถอยหลัง บอทไม่เดิน ไม่ตี', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded());
   const before = { ...match.fighters[match.botId].pose };
   for (let now = 50; now < COUNTDOWN_MS - 100; now += 50) tickBot(arena, now, 0.05);
@@ -96,7 +96,7 @@ test('ช่วงนับถอยหลัง บอทไม่เดิน 
 });
 
 test('บอทเริ่มด้วยชุดอาวุธของตัวเอง แล้วตีคนที่ยืนนิ่งจนเลือดลด', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(3));
   run(arena, 0, COUNTDOWN_MS + 20000);
   assert.notEqual(match.fighters[match.botId].weapon, 'fists');
@@ -104,7 +104,7 @@ test('บอทเริ่มด้วยชุดอาวุธของต�
 });
 
 test('ระดับยากชนะคนที่ยืนเฉยได้ภายในเวลา · ไม่นับสถิติชนะ', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded(11));
   run(arena, 0, COUNTDOWN_MS + 90000);
   assert.equal(match.winner, BOT_LEVELS.hard.name);
@@ -112,7 +112,7 @@ test('ระดับยากชนะคนที่ยืนเฉยได�
 });
 
 test('บอทไม่เดินทะลุเสา ไม่ออกนอกลาน', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'hard', 0, LOOK, seeded(5));
   run(arena, 0, COUNTDOWN_MS + 15000, () => {
     const p = match.fighters[match.botId].pose;
@@ -124,7 +124,7 @@ test('บอทไม่เดินทะลุเสา ไม่ออกน�
 test('บอทระดับยากหลบค้อนที่ง้างใส่ได้บ่อยกว่าระดับง่าย', () => {
   // วางคนถือค้อนหน้าบอท ง้างทุกครั้งที่พร้อม นับว่าโดนกี่ที
   const hitsFor = (level) => {
-    const arena = createArena();
+    const arena = createArena({ map: 'stone' });
     const { match } = startBotMatch(arena, 'a', 'A', level, 0, LOOK, seeded(9));
     const me = match.fighters.a;
     const bot = match.fighters[match.botId];
@@ -161,7 +161,7 @@ test('ระยะที่บอทชอบ: ยิงไกลยืนห่
 });
 
 test('โหมดลองอาวุธ: หุ่นไม่เดิน ไม่ตี เลือดหมดแล้วฟื้น ไม่จบแมตช์ ไม่หมดเวลา', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'dummy', 0, LOOK, seeded());
   assert.equal(match.practice, true);
   const dummy = match.fighters[match.botId];
@@ -181,7 +181,7 @@ test('โหมดลองอาวุธ: หุ่นไม่เดิน �
 });
 
 test('บอทถืออาวุธยิงตอนอยู่ไกล สลับเป็นอาวุธประชิดตอนเข้าใกล้', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(2));
   const bot = match.fighters[match.botId];
   bot.loadout = ['sword', 'bow'];
@@ -193,7 +193,7 @@ test('บอทถืออาวุธยิงตอนอยู่ไกล �
 });
 
 test('บอทถือโล่ใหญ่ยกโล่รับท่าฟันได้ (เดิมเช็คแค่ guard ≥ 0.6 → ไม่เคยยกโล่เลย)', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(3), undefined);
   const me = match.fighters.a;
   const bot = match.fighters[match.botId];
@@ -220,12 +220,12 @@ test('เลือกอาวุธให้ NPC ได้ (ไว้ทดส�
   assert.equal(botKitFor('<script>'), null);
   assert.equal(botKitFor(undefined), null);
 
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(1), undefined, 'spear');
   assert.deepEqual(match.fighters[match.botId].loadout, ['spear', 'sword']);
   assert.equal(match.fighters[match.botId].weapon, 'spear');
 
-  const other = createArena();
+  const other = createArena({ map: 'stone' });
   const { match: random } = startBotMatch(other, 'b', 'B', 'normal', 0, LOOK, seeded(1), undefined, 'nope');
   assert.ok(BOT_LEVELS.normal.kits.some((kit) => kit.join() === random.fighters[random.botId].loadout.join()));
 });

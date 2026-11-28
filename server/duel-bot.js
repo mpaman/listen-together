@@ -27,12 +27,12 @@ export function createBrain(level, rand = Math.random) {
   return { level, vy: 0, nextThinkAt: 0, blockUntil: 0, rollSpeed: 0, strafe: rand() < 0.5 ? 1 : -1, dodgeUntil: 0, dodgeDir: null, nextAttackAt: 0, rand };
 }
 
-// มีเสาบังระหว่างสองจุดไหม (ยิงไปก็ชนเสา)
-export function blockedLine(a, b) {
+// มีเสาบังระหว่างสองจุดไหม (ยิงไปก็ชนเสา) · obstacles = ของแผนที่แมตช์นั้น
+export function blockedLine(a, b, obstacles = undefined) {
   const steps = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.4);
   for (let i = 1; i < steps; i += 1) {
     const k = i / steps;
-    if (inPillar(a.x + (b.x - a.x) * k, a.z + (b.z - a.z) * k, 0.15)) return true;
+    if (inPillar(a.x + (b.x - a.x) * k, a.z + (b.z - a.z) * k, 0.15, obstacles)) return true;
   }
   return false;
 }
@@ -71,7 +71,7 @@ function threat(match, botId, me, now) {
 }
 
 // เดินไปทาง (dx, dz) ทีละนิด · ชนเสาลองเบี่ยงซ้าย/ขวา · ไม่ออกนอกลาน
-function step(pose, dx, dz, speed, dt) {
+function step(pose, dx, dz, speed, dt, obstacles) {
   const len = Math.hypot(dx, dz);
   if (len < 1e-3) return;
   const ux = dx / len;
@@ -79,17 +79,17 @@ function step(pose, dx, dz, speed, dt) {
   for (const [ax, az] of [[ux, uz], [uz, -ux], [-uz, ux]]) {
     const nx = clampArena(pose.x + ax * speed * dt);
     const nz = clampArena(pose.z + az * speed * dt);
-    if (inPillar(nx, nz, BODY_RADIUS)) continue;
+    if (inPillar(nx, nz, BODY_RADIUS, obstacles)) continue;
     pose.x = round(nx);
     pose.z = round(nz);
     return;
   }
 }
 
-function inStrikeRange(kind, me, them, ry) {
+function inStrikeRange(kind, me, them, ry, obstacles) {
   const w = WEAPONS[kind];
   const d = Math.hypot(them.x - me.x, them.z - me.z);
-  if (w.type === 'shot') return d < 14 && !blockedLine(me, them);
+  if (w.type === 'shot') return d < 14 && !blockedLine(me, them, obstacles);
   if (w.type === 'slam') return Math.abs(d - w.range) < w.radius * 0.8;
   const facing = Math.cos(angleTo(me, them) - ry);
   return d <= w.range + BODY_RADIUS * 0.6 && facing > Math.cos(((w.arc / 2) * Math.PI) / 180);
@@ -173,7 +173,7 @@ export function stepBot(match, botId, now, dt) {
   const drinking = now < bot.drinkUntil;
   const speed = (WALK + 1) * cfg.speed * WEAPONS[bot.weapon].move * (bot.blocking ? 0.5 : 1) * (drinking ? POTION.move : 1);
   if (now < brain.dodgeUntil && brain.dodgeDir) {
-    step(me, brain.dodgeDir.x, brain.dodgeDir.z, brain.rollSpeed || RUN * cfg.speed, dt);
+    step(me, brain.dodgeDir.x, brain.dodgeDir.z, brain.rollSpeed || RUN * cfg.speed, dt, match.obstacles);
   } else {
     // รักษาระยะที่ถนัด + เดินวนข้าง (ยิงไกลวนมากกว่า)
     const dx = them.x - me.x;
@@ -182,12 +182,12 @@ export function stepBot(match, botId, now, dt) {
     const want = preferredRange(bot.weapon);
     const radial = d > want + 0.3 ? 1 : d < want - 0.6 ? -1 : 0;
     const orbit = WEAPONS[bot.weapon].type === 'shot' ? 0.8 : 0.35;
-    step(me, (dx / d) * radial + (-dz / d) * brain.strafe * orbit, (dz / d) * radial + (dx / d) * brain.strafe * orbit, speed, dt);
+    step(me, (dx / d) * radial + (-dz / d) * brain.strafe * orbit, (dz / d) * radial + (dx / d) * brain.strafe * orbit, speed, dt, match.obstacles);
   }
 
   // หันหาคู่ + โจมตีเมื่อเข้าระยะ (เล็งพลาดได้ตามระดับ)
   me.ry = round(wrap(turnToward(me.ry, angleTo(me, them), 0.35)));
-  if (now >= bot.readyAt && now >= brain.nextAttackAt && !bot.blocking && me.y < SLAM_DODGE_Y && inStrikeRange(bot.weapon, me, them, me.ry)) {
+  if (now >= bot.readyAt && now >= brain.nextAttackAt && !bot.blocking && me.y < SLAM_DODGE_Y && inStrikeRange(bot.weapon, me, them, me.ry, match.obstacles)) {
     const aim = angleTo(me, them) + (brain.rand() - 0.5) * 2 * cfg.aimErr;
     const swing = attack(match, botId, aim, now);
     if (swing) events.push({ type: 'swing', id: botId, ...swing });

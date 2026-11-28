@@ -72,3 +72,8 @@ test('cleanPose: y = ความสูงเท้า บีบให้อย�
   assert.equal(cleanPose({ x: 0, z: 0, ry: 0 }).y, 0);
   assert.equal(cleanPose({ x: 0, y: 'up', z: 0, ry: 0 }).y, 0);
 });
+test('cleanPose: ท่าค้าง rest รับแค่ sit/lie/wai · อื่นๆ หรือไม่ส่ง → null', () => {
+  for (const kind of ['sit', 'lie', 'wai']) assert.equal(cleanPose({ x: 0, z: 0, ry: 0, rest: kind }).rest, kind);
+  assert.equal(cleanPose({ x: 0, z: 0, ry: 0, rest: 'dance' }).rest, null);
+  assert.equal(cleanPose({ x: 0, z: 0, ry: 0 }).rest, null);
+});

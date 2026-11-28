@@ -5,12 +5,13 @@ import {
   matchOf, MAX_MATCHES, queueNames, setPose, setPracticeWeapon, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
 } from '../server/duel.js';
 import {
+  ARENA_MAPS, inPillar, MAP_KINDS, SPAWNS,
   cleanLoadout, COUNTDOWN_MS, DEFAULT_LOADOUT, FIGHT_MS, HP_MAX, POTION, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHIELD, STAMINA, SWAP_MS, WEAPONS,
 } from '../public/arena-rules.js';
 
 // เริ่มแมตช์ A vs B แล้วข้ามนับถอยหลังให้เข้าช่วงสู้เลย
 function fighting(t0 = 0) {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', t0);
   joinQueue(arena, 'b', 'B', t0);
   stepDuel(arena, t0 + COUNTDOWN_MS);
@@ -26,7 +27,7 @@ function hold(match, id, kind) {
 const place = (match, id, x, z, ry = 0, y = 0) => setPose(match, id, { x, y, z, ry });
 
 test('คนเดียวกดเข้าคิว = รอ · คนที่สองกด = เริ่มแมตช์', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   assert.deepEqual(joinQueue(arena, 'a', 'A', 0), { queued: true });
   assert.deepEqual(queueNames(arena), ['A']);
   const res = joinQueue(arena, 'b', 'B', 0);
@@ -38,7 +39,7 @@ test('คนเดียวกดเข้าคิว = รอ · คนที�
 });
 
 test('กดซ้ำไม่เข้าคิวสองรอบ · ยกเลิกคิวได้', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0);
   joinQueue(arena, 'a', 'A', 0);
   assert.deepEqual(queueNames(arena), ['A']);
@@ -66,7 +67,7 @@ test('สู้ได้หลายคู่พร้อมกัน: คู่
 });
 
 test('ลานเต็ม (ครบ MAX_MATCHES) → คนที่เหลือรอคิว แล้วได้ลงเมื่อแมตช์ไหนปิด', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   for (let i = 0; i < MAX_MATCHES * 2; i += 1) joinQueue(arena, `p${i}`, `P${i}`, 0);
   assert.equal(arena.matches.size, MAX_MATCHES);
   joinQueue(arena, 'x', 'X', 0);
@@ -80,7 +81,7 @@ test('ลานเต็ม (ครบ MAX_MATCHES) → คนที่เหล
 });
 
 test('ช่วงนับถอยหลังยังตีไม่ได้', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0);
   joinQueue(arena, 'b', 'B', 0);
   assert.equal(attack(arena.match, 'a', 0, 100), null);
@@ -197,7 +198,7 @@ test('หมดเวลา: เลือดมากกว่าชนะ · �
 });
 
 test('เลือกอาวุธหลัก/รองก่อนเข้าลาน · เริ่มด้วยอาวุธหลัก · ค่าผิดใช้ชุดเริ่มต้น', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0, ['hammer', 'staff']);
   joinQueue(arena, 'b', 'B', 0, ['spear', 'spear']); // ซ้ำกัน = ไม่ถูก
   assert.deepEqual(arena.match.fighters.a.loadout, ['hammer', 'staff']);
@@ -209,7 +210,7 @@ test('เลือกอาวุธหลัก/รองก่อนเข้�
 });
 
 test('สลับอาวุธ: ได้อีกอัน · ต้องรอแป๊บก่อนตี', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0, ['sword', 'bow']);
   joinQueue(arena, 'b', 'B', 0);
   const t = COUNTDOWN_MS;
@@ -339,7 +340,7 @@ test('publicMatch บอกเวลาที่เหลือเป็น ms (
 });
 
 test('หลุดตอนอยู่ในคิว = แค่ออกจากคิว ไม่มีแมตช์จบ', () => {
-  const arena = createArena();
+  const arena = createArena({ map: 'stone' });
   joinQueue(arena, 'a', 'A', 0);
   assert.deepEqual(forfeit(arena, 'a', 1), []);
   assert.deepEqual(queueNames(arena), []);
@@ -399,4 +400,40 @@ test('โหมดลองอาวุธ ยาไม่ลด', () => {
   match.practice = true;
   match.fighters.a.hp = 50;
   assert.equal(act(match, 'a', 'heal', t).potions, POTION.count);
+});
+
+test('ลาน 3 แบบ: จุดเกิดกับกลางลานว่าง · สิ่งกีดขวางอยู่ในลาน · สุ่มทุกแมตช์', () => {
+  assert.equal(MAP_KINDS.length, 3);
+  for (const kind of MAP_KINDS) {
+    const { obstacles } = ARENA_MAPS[kind];
+    for (const s of SPAWNS) assert.ok(!inPillar(s.x, s.z, 0.6, obstacles), `${kind} จุดเกิดชน`);
+    for (const o of obstacles) assert.ok(Math.abs(o.x) + o.sx < 9 && Math.abs(o.z) + o.sz < 9, `${kind} ออกนอกลาน`);
+  }
+  const arena = createArena();
+  const seen = new Set();
+  for (let i = 0; i < 60; i += 1) {
+    joinQueue(arena, `a${i}`, `A${i}`, 0);
+    joinQueue(arena, `b${i}`, `B${i}`, 0);
+    seen.add(arena.match.map);
+    assert.equal(publicMatch(arena.match, 0).map, arena.match.map);
+    arena.matches.clear();
+  }
+  assert.equal(seen.size, 3);
+});
+
+test('ลานซากปราสาท: ก้อนกลางลานบังลูกยิง · ลานหินยิงตรงกลางได้', () => {
+  const arena = createArena({ map: 'ruins' });
+  joinQueue(arena, 'a', 'A', 0);
+  joinQueue(arena, 'b', 'B', 0);
+  stepDuel(arena, COUNTDOWN_MS);
+  const { match } = arena;
+  hold(match, 'a', 'bow');
+  place(match, 'a', 0, -6, 0);
+  place(match, 'b', 0, 6, Math.PI);
+  let now = COUNTDOWN_MS;
+  attack(match, 'a', 0, now);
+  const all = [];
+  for (let i = 0; i < 40; i += 1, now += 50) all.push(...stepDuel(arena, now));
+  assert.equal(all.find((e) => e.type === 'shotEnd')?.why, 'pillar');
+  assert.equal(all.some((e) => e.type === 'hit'), false);
 });

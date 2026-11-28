@@ -10,13 +10,30 @@ export const RESULT_MS = 5500; // โชว์ผลแพ้ชนะก่อ�
 export const BODY_RADIUS = 0.35;
 export const BODY_HEIGHT = 1.9;
 
-// เสาหิน 4 ต้น = ที่หลบลูกธนู/ลูกไฟ (ลูกยิงชนเสาแล้วหาย) · x, z = กลางเสา · s = ครึ่งความกว้าง
-export const PILLARS = [
-  { x: -4.5, z: -4.5, s: 0.7, h: 2.6 },
-  { x: 4.5, z: -4.5, s: 0.7, h: 2.6 },
-  { x: -4.5, z: 4.5, s: 0.7, h: 2.6 },
-  { x: 4.5, z: 4.5, s: 0.7, h: 2.6 },
-];
+// ลานประลอง 3 แบบ สุ่มทุกแมตช์ (Man ขอ 11-28 ให้ไม่ซ้ำเดิม) · obstacles = กล่องที่เดินผ่านไม่ได้ + ลูกยิงชนแล้วหาย
+// x, z = กลาง · sx, sz = ครึ่งความกว้าง/ลึก · h = ความสูง (ใช้แค่วาด · ชนกันดูแค่แนวราบ)
+// จุดเกิด (0, ±6.5) กับกลางลานต้องว่างทุกแบบ (test เช็ค) · ต่างกันที่การเล่น:
+//   ลานหิน = เสา 4 มุม หลบลูกยิงได้ · ซากปราสาท = ก้อนใหญ่กลางลานบังสายตา ต้องอ้อมเข้าหา · ทุ่งหิมะ = หินเตี้ยกระจาย ที่โล่งเยอะ ธนูได้เปรียบ
+const box = (x, z, sx, sz, h) => ({ x, z, sx, sz, h });
+export const ARENA_MAPS = {
+  stone: {
+    name: 'ลานหิน',
+    obstacles: [box(-4.5, -4.5, 0.7, 0.7, 2.6), box(4.5, -4.5, 0.7, 0.7, 2.6), box(-4.5, 4.5, 0.7, 0.7, 2.6), box(4.5, 4.5, 0.7, 0.7, 2.6)],
+  },
+  ruins: {
+    name: 'ซากปราสาท',
+    obstacles: [box(0, 0, 1.3, 1.3, 2.4), box(-5.5, 0, 0.45, 2.4, 1.8), box(5.5, 0, 0.45, 2.4, 1.8), box(-2.6, -4.2, 0.9, 0.35, 1.2), box(2.6, 4.2, 0.9, 0.35, 1.2)],
+  },
+  snow: {
+    name: 'ทุ่งหิมะ',
+    obstacles: [box(-3, -2.5, 0.6, 0.6, 1.3), box(3, 2.5, 0.6, 0.6, 1.3), box(-6, 3, 0.8, 0.5, 1.1), box(6, -3, 0.8, 0.5, 1.1), box(2.8, -5.2, 0.5, 0.5, 1.2), box(-2.8, 5.2, 0.5, 0.5, 1.2)],
+  },
+};
+export const MAP_KINDS = Object.keys(ARENA_MAPS);
+export const pickMap = (rand = Math.random) => MAP_KINDS[Math.floor(rand() * MAP_KINDS.length)];
+export const obstaclesOf = (map) => (ARENA_MAPS[map] ?? ARENA_MAPS.stone).obstacles;
+// ลานหินเดิม (โค้ด/test ที่ยังไม่รู้จักหลายแผนที่ใช้ค่านี้)
+export const PILLARS = ARENA_MAPS.stone.obstacles;
 
 // คนแรกเกิดฝั่ง +z หันเข้ากลาง (ry = π) · คนที่สองฝั่ง -z (ry = 0)
 export const SPAWNS = [
@@ -119,7 +136,7 @@ export const SLAM_DODGE_Y = 0.6;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 export const clampArena = (v) => clamp(v, -(ARENA_HALF - BODY_RADIUS), ARENA_HALF - BODY_RADIUS);
 
-// จุด (x, z) อยู่ในเสาไหม (pad = เผื่อรัศมี เช่น ตัวคน/ลูกไฟ)
-export function inPillar(x, z, pad = 0) {
-  return PILLARS.some((p) => Math.abs(x - p.x) < p.s + pad && Math.abs(z - p.z) < p.s + pad);
+// จุด (x, z) อยู่ในสิ่งกีดขวางไหม (pad = เผื่อรัศมี เช่น ตัวคน/ลูกไฟ) · obstacles = ของแผนที่นั้น (obstaclesOf)
+export function inPillar(x, z, pad = 0, obstacles = PILLARS) {
+  return obstacles.some((p) => Math.abs(x - p.x) < p.sx + pad && Math.abs(z - p.z) < p.sz + pad);
 }

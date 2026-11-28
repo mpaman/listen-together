@@ -347,6 +347,33 @@ export function createAvatar(look) {
     parts.armR.rotation.set(mix(parts.armR.rotation.x, -1), 0, mix(parts.armR.rotation.z, -0.45));
     body.rotation.x += 0.08 * g; // ย่อตัวตั้งรับ
   }
+  // ท่าค้าง: ค่อยๆ เข้าท่า/ออกท่า (ไม่วาร์ป) · จำท่าล่าสุดไว้ตอนกำลังออกท่า
+  let restKind = null;
+  let restK = 0;
+  function applyRest(dt, rest) {
+    const want = rest === 'lie' || rest === 'wai';
+    if (want) restKind = rest;
+    restK += ((want ? 1 : 0) - restK) * (1 - Math.exp(-dt * 8));
+    if (!want && restK < 0.01) restKind = null;
+    if (!restKind) return;
+    const k = restK;
+    const mix = (a, b) => a + (b - a) * k;
+    if (restKind === 'lie') { // นอนหงาย เอามือหนุนหัว
+      body.rotation.x = mix(body.rotation.x, -Math.PI / 2);
+      body.position.y += 0.16 * k;
+      parts.legL.rotation.x = mix(parts.legL.rotation.x, 0);
+      parts.legR.rotation.x = mix(parts.legR.rotation.x, 0);
+      parts.armL.rotation.set(mix(parts.armL.rotation.x, -2.8), 0, mix(parts.armL.rotation.z, -0.45));
+      parts.armR.rotation.set(mix(parts.armR.rotation.x, -2.8), 0, mix(parts.armR.rotation.z, 0.45));
+      parts.head.rotation.x = mix(parts.head.rotation.x, 0.2);
+    } else { // ไหว้: พนมมือระดับอก ก้มหัวนิดๆ
+      parts.armL.rotation.set(mix(parts.armL.rotation.x, -1.35), 0, mix(parts.armL.rotation.z, 0.62));
+      parts.armR.rotation.set(mix(parts.armR.rotation.x, -1.35), 0, mix(parts.armR.rotation.z, -0.62));
+      parts.head.rotation.x = mix(parts.head.rotation.x, 0.22);
+      body.rotation.x += 0.06 * k;
+    }
+  }
+
   function setGuard(on) {
     guardOn = Boolean(on);
   }
@@ -363,7 +390,8 @@ export function createAvatar(look) {
   // ทุกเฟรมคืนท่าเริ่มต้นก่อน แล้วค่อยใส่ท่า
   // groove = ตำแหน่งในจังหวะเพลง 0..1 (ทุกคนในฟลอร์ใช้ค่าเดียวกันจากนาฬิกาเครื่อง → โยกพร้อมกัน) · null = ไม่โยก
   // air = null (ยืนพื้น) หรือ -1..1 (ลอย: + พุ่งขึ้น / − ร่วงลง) · lean = -1..1 เลี้ยวซ้าย(+)/ขวา(−) → เอียงเข้าโค้ง
-  function update(dt, { speed = 0, seated = false, groove = null, air = null, lean = 0 } = {}) {
+  // rest = ท่าค้าง 'lie' (นอนหงาย) / 'wai' (ไหว้) · 'sit' นั่งพื้นมากับ seated แล้ว
+  function update(dt, { speed = 0, seated = false, groove = null, air = null, lean = 0, rest = null } = {}) {
     if (parts.crown) { // มงกุฎหมุนช้าๆ ลอยขึ้นลงนิดๆ ให้รู้ว่าเป็นของพิเศษ
       crownT += dt;
       parts.crown.rotation.y = crownT * 0.9;
@@ -428,6 +456,7 @@ export function createAvatar(look) {
     if (parts.held) animateItem(parts.held, clock);
     parts.backAnim?.(dt, { clock, speed: move, air }); // ปีกกระพือ / ผ้าคลุมปลิว / ไฟเจ็ตแพ็ก
     applyGuard(dt);
+    applyRest(dt, rest);
 
     // กะพริบตา
     blinkIn -= dt;

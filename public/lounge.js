@@ -5,6 +5,9 @@
 import * as THREE from 'three';
 import { gpuNameOf, isSoftwareGpu } from './gpu-check.js';
 import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
+
+// นั่งพื้น: สะโพกลงมาเหลือแค่ความหนาขา (~0.11 m) → ขาเหยียดวางราบกับพื้นพอดี
+const FLOOR_SIT_DROP = 0.11 - SEAT_HIP;
 import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
 import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
 import { AIR_STEP, blockedAt, cellAt, groundAt, STEP_UP, supportAt } from './lounge-terrain.js';
@@ -173,7 +176,7 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelSwap, onDuelAct, onDuelPracticeWeapon }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelSwap, onDuelAct, onDuelPracticeWeapon, onRest }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -247,6 +250,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       ry: pose.ry,
       target: { x: pose.x, y, z: pose.z, ry: pose.ry },
       sit: pose.sit ?? null,
+      rest: pose.rest ?? null, // ท่าค้าง: 'sit' นั่งพื้น / 'lie' นอน / 'wai' ไหว้ · null = ยืนปกติ
       speed: 0,
       vel: { x: 0, z: 0 }, // ความเร็วจริง (m/s) ของเรา — ค่อยๆ เร่ง/ชะลอ ไม่ได้เริ่ม-หยุดทันที
       vy: 0, // ความเร็วแนวดิ่ง (กระโดด/ตก)
@@ -362,7 +366,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   let hitCooldownUntil = 0;
 
   function poseOf(entry) {
-    return { x: entry.pos.x, y: entry.pos.y, z: entry.pos.z, ry: entry.ry, sit: entry.sit };
+    return { x: entry.pos.x, y: entry.pos.y, z: entry.pos.z, ry: entry.ry, sit: entry.sit, rest: entry.rest };
   }
 
   function sendPose(now, force = false) {
@@ -370,7 +374,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (!entry || (!force && now - lastSendAt < POSE_SEND_MS)) return;
     if (duel?.inArena()) return sendDuelPose(entry, now);
     const pose = poseOf(entry);
-    const key = `${pose.x.toFixed(2)},${pose.y.toFixed(2)},${pose.z.toFixed(2)},${pose.ry.toFixed(2)},${pose.sit}`;
+    const key = `${pose.x.toFixed(2)},${pose.y.toFixed(2)},${pose.z.toFixed(2)},${pose.ry.toFixed(2)},${pose.sit},${pose.rest}`;
     if (key === lastSent) return;
     lastSent = key;
     lastSendAt = now;
@@ -391,9 +395,29 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   const seatTaken = (index) => [...avatars.entries()].some(([id, e]) => id !== myId && e.sit === index);
 
+  // ท่าค้าง (นั่งพื้น/นอน/ไหว้ ตรงไหนก็ได้): กดครั้งแรก = ทำค้างไว้ · กดซ้ำ = เลิก · กดท่าอื่น = เปลี่ยนท่า
+  // เดิน/กระโดด/นั่งโซฟา = เลิกท่าเอง (ไม่งั้นตัวนอนไถลไปตามพื้น)
+  function setRest(kind) {
+    const entry = me();
+    if (!entry || duel?.inArena()) return;
+    if (entry.sit !== null) standUp();
+    entry.rest = entry.rest === kind ? null : kind;
+    entry.vel.x = entry.vel.z = 0;
+    walkTo = null;
+    sendPose(performance.now(), true);
+    onRest?.(entry.rest);
+  }
+  function clearRest(entry) {
+    if (!entry.rest) return;
+    entry.rest = null;
+    sendPose(performance.now(), true);
+    onRest?.(null);
+  }
+
   function sitOn(index) {
     const entry = me();
     if (!entry) return;
+    clearRest(entry);
     if (seatTaken(index)) return onNotice('ที่นั่งนี้มีคนนั่งแล้ว');
     const seat = SEATS[index];
     entry.sit = index;
@@ -442,6 +466,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   // กระโดดจริง: ต้องยืนบนพื้น (หรือเพิ่งตกขอบไม่เกิน COYOTE_MS) · ลอยอยู่ = กดซ้ำไม่ได้ (ไม่มีกระโดด 2 ชั้น)
   function jump(entry) {
     if (entry.sit !== null) standUp();
+    clearRest(entry);
     if (performance.now() - entry.groundedAt > COYOTE_MS) return false;
     entry.vy = JUMP_SPEED;
     entry.groundedAt = -Infinity;
@@ -520,11 +545,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (kx || kz) {
       walkTo = null;
       if (entry.sit !== null) standUp();
+      clearRest(entry);
       if (duel?.inArena()) return { dx: kx, dz: kz, want: ARENA_SPEED * duel.moveScale() };
       return { dx: kx, dz: kz, want: running ? RUN_SPEED : WALK_SPEED };
     }
     if (!walkTo) return { dx: 0, dz: 0, want: 0 };
     if (entry.sit !== null) standUp();
+    clearRest(entry);
     const dx = walkTo.x - entry.pos.x;
     const dz = walkTo.z - entry.pos.z;
     const left = Math.hypot(dx, dz);
@@ -1007,18 +1034,21 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     for (const [id, entry] of avatars) {
       entry.av.root.visible = !duel.hides(id);
       if (!entry.av.root.visible) continue;
-      const seated = entry.sit !== null;
-      if (seated) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
+      // นั่งพื้น = ท่านั่งเดียวกับโซฟา แต่ลดตัวลงจนขาวางราบกับพื้น · ในลานประลองไม่มีท่าค้าง
+      const rest = duel.inArena() ? null : entry.rest;
+      const seated = entry.sit !== null || rest === 'sit';
+      if (entry.sit !== null) entry.lastDrop = SEATS[entry.sit].h - SEAT_HIP; // จำไว้ให้ตอนลุก ตัวค่อยๆ ยืดขึ้น ไม่วูบ
+      else if (rest === 'sit') entry.lastDrop = FLOOR_SIT_DROP;
       // ก้าวขึ้นขั้นเตี้ย (pos.y กระโดดทีละ 0.5) → ภาพไล่ตามเร็วๆ · ลอย/ตก = ตามจริงทันที
       const rising = entry.pos.y > entry.viewY && entry.pos.y - entry.viewY < 0.6 && entry.vy === 0;
       entry.viewY = rising ? entry.viewY + (entry.pos.y - entry.viewY) * (1 - Math.exp(-dt * 20)) : entry.pos.y;
       entry.av.root.position.set(entry.pos.x, entry.viewY + (entry.lastDrop ?? 0) * entry.av.sitAmount(), entry.pos.z);
       entry.av.root.rotation.y = entry.ry;
       // ยืนนิ่งบนฟลอร์ตอนเพลงเล่น → โยกตามจังหวะ (ทุกเครื่องคิดเองจากตำแหน่ง ไม่ต้องส่งผ่าน server)
-      const groove = music && !seated && entry.speed < 0.15 && onDanceFloor(entry.pos.x, entry.pos.z) ? beats : null;
+      const groove = music && !seated && !rest && entry.speed < 0.15 && onDanceFloor(entry.pos.x, entry.pos.z) ? beats : null;
       entry.dancing = groove !== null;
       const motion = trackMotion(entry, dt, seated);
-      entry.av.update(dt, { speed: entry.speed, seated, groove, ...motion });
+      entry.av.update(dt, { speed: entry.speed, seated, groove, rest, ...motion });
     }
     fx.update(dt);
     animateGround(now);
@@ -1138,6 +1168,9 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   };
   const ACTION_KEYS = {
     KeyE: toggleSit,
+    KeyC: () => setRest('sit'),
+    KeyZ: () => setRest('lie'),
+    KeyH: () => setRest('wai'),
     KeyG: dropHeld,
     Equal: zoomIn, // ปุ่ม = / + ข้าง backspace
     NumpadAdd: zoomIn,
@@ -1248,11 +1281,12 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     toggleFullscreen: toggleCombatScreen,
     add,
     remove,
-    pose({ id, x, y, z, ry, sit }) {
+    pose({ id, x, y, z, ry, sit, rest }) {
       const entry = avatars.get(id);
       if (!entry || id === myId) return;
       entry.target = { x, y: Number.isFinite(y) ? y : supportAt(x, z), z, ry };
       entry.sit = sit ?? null;
+      entry.rest = rest ?? null;
     },
     look(id, look) {
       avatars.get(id)?.av.setLook(look);
@@ -1272,6 +1306,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     dropHeld,
     gesture,
     toggleSit,
+    toggleRest: setRest,
     setMyLook(look) {
       me()?.av.setLook(look);
     },

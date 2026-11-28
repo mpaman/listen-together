@@ -39,8 +39,12 @@ export function cleanPose(raw) {
     z: round(clamp(z, -ROOM_HALF_Z, ROOM_HALF_Z)),
     ry: round(((ry % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)),
     sit: isIndex(raw.sit, SEAT_COUNT) ? raw.sit : null,
+    // ท่าค้าง (นั่งพื้น/นอน/ไหว้) · ค้างจนกดใหม่หรือเดิน
+    rest: RESTS.includes(raw.rest) ? raw.rest : null,
   };
 }
+
+export const RESTS = ['sit', 'lie', 'wai'];
 
 export const cleanGesture = (raw) => (GESTURES.includes(raw) ? raw : null);
 
