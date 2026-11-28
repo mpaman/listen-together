@@ -55,8 +55,8 @@ let mediaSession = null;
 function loadLook() {
   try {
     const saved = JSON.parse(localStorage.getItem(LOOK_KEY));
-    // server กรองค่าซ้ำอีกชั้น · ตัวที่บันทึกไว้ก่อนมีของบนหลัง/ลายชุด → สุ่มเติมส่วนที่ขาดแล้วจำไว้ (หน้าตาเดิมไม่เปลี่ยน)
-    if (saved && typeof saved === 'object') return 'back' in saved && 'outfit' in saved ? saved : saveLook({ ...randomLook(), ...saved });
+    // server กรองค่าซ้ำอีกชั้น · ตัวที่บันทึกไว้ก่อนมีส่วนใหม่ (ของบนหลัง/ลายชุด/คลาสตัวละคร) → สุ่มเติมส่วนที่ขาดแล้วจำไว้ (ส่วนเดิมไม่เปลี่ยน)
+    if (saved && typeof saved === 'object') return ['back', 'outfit', 'cls'].every((k) => k in saved) ? saved : saveLook({ ...randomLook(), ...saved });
   } catch {
     // ไม่มี/อ่านไม่ได้ → สุ่มใหม่
   }

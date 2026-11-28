@@ -4,7 +4,8 @@
 // ของในลาน: server เป็นคนวาง/ตัดสินว่าใครเก็บได้ เครื่องเราแค่บอกว่า "เดินทับชิ้นนี้แล้ว"
 import * as THREE from 'three';
 import { gpuNameOf, isSoftwareGpu } from './gpu-check.js';
-import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
+import { HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
+import { createAvatar } from './lounge-model.js';
 
 // นั่งพื้น: สะโพกลงมาเหลือแค่ความหนาขา (~0.11 m) → ขาเหยียดวางราบกับพื้นพอดี
 const FLOOR_SIT_DROP = 0.11 - SEAT_HIP;
@@ -1287,6 +1288,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
     debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), y: +e.pos.y.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
     // ใช้ตอน ?debug=1 / ทดสอบ: ย้ายตัวเราไปจุดนั้นทันที (pane ถูกซ่อน = เฟรมช้า เดินจริงไม่ทัน)
+    debugRender: () => ({ visible, calls: renderer.info.render.calls, frame: renderer.info.render.frame, cam: camera.position.toArray(), bloom: Boolean(bloom?.composer) }),
+    debugAv: (id) => avatars.get(id ?? myId)?.av, // ตรวจท่า/กระดูกของโมเดล (เฉพาะ ?debug)
     debugFx: () => fx, // ทดสอบเอฟเฟกต์ (เปิดได้เฉพาะ ?debug) · ประกายหายเร็วเกินกว่าจะจับภาพตอนตีจริง
     debugMove: (x, z) => {
       const entry = me();
@@ -1376,5 +1379,11 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     resetView,
     // ใช้ตอน ?debug=1 / ทดสอบ: ดูมุมกล้องปัจจุบัน
     debugCamera: () => ({ yaw: +camYaw.toFixed(3), pitch: +camPitch.toFixed(3), y: +camera.position.y.toFixed(2) }),
+    // ตั้งมุมกล้องตรงๆ (ใช้ทดสอบหน้าตาโมเดล · pane ลากเมาส์ขวาหมุนกล้องไม่ได้)
+    debugView: (yaw, pitch) => {
+      camYaw = yaw;
+      camPitch = pitch;
+      snapCamera();
+    },
   };
 }

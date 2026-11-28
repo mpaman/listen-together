@@ -17,14 +17,16 @@ const inRange = (look) => Object.entries(LOOK_PARTS).every(([k, n]) => Number.is
 
 test('randomLook: ทุกส่วนอยู่ในช่วงตัวเลือก', () => {
   for (let i = 0; i < 50; i += 1) assert.ok(inRange(randomLook()));
-  assert.deepEqual(randomLook(() => 0), { body: 0, skin: 0, hat: 0, face: 0, back: 0, outfit: 0 });
+  assert.deepEqual(randomLook(() => 0), { body: 0, skin: 0, hat: 0, face: 0, back: 0, outfit: 0, cls: 0 });
 });
 
 test('cleanLook: เก็บค่าที่ถูก แทนค่าที่ผิดด้วยค่าสุ่ม ตัด key แปลกทิ้ง', () => {
-  const look = cleanLook({ body: 3, skin: 99, hat: -1, face: 1.5, evil: 'x' }, () => 0);
-  assert.deepEqual(look, { body: 3, skin: 0, hat: 0, face: 0, back: 0, outfit: 0 });
-  // client รุ่นเก่า (ยังไม่มีของบนหลัง/ลายชุด) → สุ่มเติมให้ ไม่ปัดทิ้งทั้งตัว
-  assert.deepEqual(cleanLook({ body: 2, skin: 1, hat: 3, face: 2 }, () => 0), { body: 2, skin: 1, hat: 3, face: 2, back: 0, outfit: 0 });
+  const look = cleanLook({ body: 3, skin: 99, hat: -1, face: 1.5, cls: 4, evil: 'x' }, () => 0);
+  assert.deepEqual(look, { body: 3, skin: 0, hat: 0, face: 0, back: 0, outfit: 0, cls: 4 });
+  // คลาสเกินช่วง (มี 5 แบบ: 0..4) → สุ่มแทน
+  assert.equal(cleanLook({ cls: 5 }, () => 0).cls, 0);
+  // client รุ่นเก่า (ยังไม่มีของบนหลัง/ลายชุด/คลาส) → สุ่มเติมให้ ไม่ปัดทิ้งทั้งตัว
+  assert.deepEqual(cleanLook({ body: 2, skin: 1, hat: 3, face: 2 }, () => 0), { body: 2, skin: 1, hat: 3, face: 2, back: 0, outfit: 0, cls: 0 });
   assert.ok(inRange(cleanLook('nope')));
   assert.ok(inRange(cleanLook(null)));
 });

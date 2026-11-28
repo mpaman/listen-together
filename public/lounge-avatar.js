@@ -6,7 +6,8 @@ import { animateItem, buildItem } from './lounge-items.js';
 import { buildBack, decorateOutfit, outfitColors } from './lounge-outfit.js';
 
 // back = ของบนหลัง · outfit = ลายชุด (รายละเอียดอยู่ใน lounge-outfit.js)
-export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7 };
+// cls = คลาสตัวละครโมเดล 3D (lounge-model.js CLASSES) · ส่วนอื่นใช้กับตัวกล่องที่โชว์ระหว่างโหลดโมเดล
+export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7, cls: 5 };
 // จานสีแนวเกมเก่า (ENDESGA 32)
 export const BODY_COLORS = [0xe43b44, 0x0099db, 0x63c74d, 0xfeae34, 0xb55088, 0x2ce8f5, 0xf77622, 0x8b9bb4, 0x3e8948, 0x68386c];
 export const SKIN_COLORS = ['#f6c79e', '#e4a672', '#c28569', '#b86f50', '#733e39', '#ffe0c2'];
@@ -136,7 +137,7 @@ export const CROWN_TIERS = [
 ];
 export const crownTier = (wins) => CROWN_TIERS.find((t) => wins >= t.min) ?? null;
 const CROWN_Y = 0.85; // เหนือหัว (หมวกสูงสุดถึง ~0.71)
-function buildCrown(tier) {
+export function buildCrown(tier) {
   const g = new THREE.Group();
   const gold = mat(tier.color);
   block(g, 0.46, 0.1, 0.46, gold, 0, 0, 0);
@@ -173,7 +174,7 @@ const pulse = (t) => Math.sin(Math.PI * Math.min(1, Math.max(0, t))); // 0 → 1
 const BOTTLE_GLASS = new THREE.MeshLambertMaterial({ color: 0xc0e8f0, transparent: true, opacity: 0.55 });
 const BOTTLE_LIQUID = new THREE.MeshLambertMaterial({ color: 0x4ade80, emissive: 0x14532d });
 const BOTTLE_CORK = new THREE.MeshLambertMaterial({ color: 0x8b5a2b });
-function buildBottle() {
+export function buildBottle() {
   const g = new THREE.Group();
   const part = (w, h, d, mat, y) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);

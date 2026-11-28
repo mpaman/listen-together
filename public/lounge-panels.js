@@ -1,28 +1,18 @@
 // แผงลอยบนลาน 3D: วิธีเล่น (ปุ่ม ?) · แต่งตัว · เมนูประลอง · ตั้งค่าปุ่ม
 // เปิดได้ทีละแผง · Esc/ปุ่ม X ปิดแล้วคืน focus ให้ปุ่มที่กดเปิด · ไม่ปิดเมื่อคลิกฉาก (แต่งตัวอยู่ก็หมุนกล้องดูตัวเองได้)
 import { cleanLoadout, SHIELD, STAMINA, WEAPONS, WEAPON_KINDS } from './arena-rules.js';
-import { BODY_COLORS, LOOK_PARTS, SKIN_COLORS } from './lounge-avatar.js';
-import { BACK_NAMES, OUTFIT_NAMES } from './lounge-outfit.js';
+import { LOOK_PARTS } from './lounge-avatar.js';
+import { CLASSES } from './lounge-model.js';
 import { KEY_ACTIONS, canBind, keyLabel, keyOf, labelOf, mouseSwapped, onKeysChange, resetKeys, setKey, setMouseSwap } from './keybinds.js';
 
 // คอม = มีเมาส์และ hover ได้ (แล็ปท็อปจอสัมผัสก็นับเป็นคอมเพราะ pointer หลักยังเป็นเมาส์/ทัชแพด)
 export const desktopQuery = matchMedia('(hover: hover) and (pointer: fine)');
 export const isDesktop = () => desktopQuery.matches;
 
-const BODY_NAMES = ['แดง', 'ฟ้า', 'เขียว', 'เหลืองทอง', 'ม่วงชมพู', 'ฟ้าอ่อน', 'ส้ม', 'เทา', 'เขียวเข้ม', 'ม่วงเข้ม'];
-const SKIN_NAMES = ['ผิวอ่อน', 'ผิวสองสี', 'ผิวแทน', 'ผิวคล้ำ', 'ผิวเข้ม', 'ผิวขาว'];
-const HAT_NAMES = ['ไม่ใส่', 'หมวกไหมพรม', 'หมวกแก๊ป', 'หมวกปาร์ตี้', 'หูแมว', 'หูฟัง', 'มงกุฎ'];
-const FACE_NAMES = ['ปกติ', 'ยิ้มแก้มแดง', 'ตาหยี', 'ใส่แว่น'];
-const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
-
 // ส่วนที่เลือกได้ในหน้าแต่งตัว (ลำดับ = ลำดับแถว)
+// ตัวละครเป็นโมเดล 3D แล้ว (Man 11-28 เลือก: เลือกคลาสจาก 5 แบบ) · สี/หมวก/หน้าของตัวกล่องเดิมไม่ได้โชว์แล้วจึงเอาออก
 const PARTS = [
-  { key: 'body', label: 'สีเสื้อ', names: BODY_NAMES, swatch: (i) => hex(BODY_COLORS[i]) },
-  { key: 'outfit', label: 'แบบชุด', names: OUTFIT_NAMES },
-  { key: 'back', label: 'ของบนหลัง', names: BACK_NAMES },
-  { key: 'hat', label: 'หมวก', names: HAT_NAMES },
-  { key: 'face', label: 'หน้า', names: FACE_NAMES },
-  { key: 'skin', label: 'สีผิว', names: SKIN_NAMES, swatch: (i) => SKIN_COLORS[i] },
+  { key: 'cls', label: 'ตัวละคร', names: CLASSES.map((c) => c.name) },
 ];
 
 // ---------- วิธีเล่น ----------
