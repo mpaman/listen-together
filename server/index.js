@@ -51,6 +51,8 @@ function socketIp(socket) {
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 // Three.js (ห้อง 3D) เสิร์ฟจาก node_modules เอง — ไม่พึ่ง CDN ภายนอก
 app.use('/vendor/three', express.static(fileURLToPath(new URL('../node_modules/three/build', import.meta.url)), { maxAge: '7d' }));
+// ส่วนเสริมของ Three.js (bloom, ตัวโหลดโมเดล .glb) อยู่คนละโฟลเดอร์กับตัวหลัก
+app.use('/vendor/three-addons', express.static(fileURLToPath(new URL('../node_modules/three/examples/jsm', import.meta.url)), { maxAge: '7d' }));
 
 // แจก extension "host" ให้คนที่อยากกด "ฟังตามผม" (zip สร้างครั้งแรกที่มีคนขอ แล้วเก็บไว้ในหน่วยความจำ)
 let extensionZip = null;

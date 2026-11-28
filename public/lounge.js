@@ -212,6 +212,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   let land = LOUNGE_LAND;
   let duel = null; // สร้างหลังฟังก์ชันคุมตัวละครพร้อมแล้ว (ด้านล่าง)
   let shakeT = 0; // กล้องสั่นตอนโดนตี (วินาทีที่เหลือ)
+  let stopT = 0; // hit-stop: ท่าทาง/อนุภาคเกือบหยุดตอนตีเข้า (วินาทีที่เหลือ)
+  const HIT_STOP_SPEED = 0.06; // ระหว่างค้าง เดินเวลาแค่ 6% (ไม่หยุดสนิท ภาพจะได้ไม่ดูเหมือนเกมค้าง)
   let music = false;
   let screenTitle = null;
   let mvOn = false; // ตัวเล่น YouTube วางทับจอเวทีอยู่ไหม (app.js บอกผ่าน setMv)
@@ -784,10 +786,51 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     placeCamera();
   }
   new ResizeObserver(fitCamera).observe(container);
+
+  // ---------- แสงฟุ้ง (bloom) ----------
+  // เปิดเฉพาะในลานประลอง + ความละเอียดคมสุด + มีการ์ดจอ: bloom วาดภาพเพิ่มอีกหลายรอบ กินเครื่อง
+  // ลานฟังเพลงจึงไม่เปิด (FPS เดิม) · threshold สูง = ฟุ้งเฉพาะของที่จ้ามาก (ประกาย/รอยฟัน) ไม่ใช่ทั้งฉาก
+  let bloom = null; // { composer } เมื่อโหลดเสร็จ · 'loading' ระหว่างโหลด
+  function wantsBloom() {
+    return !softwareGpu && quality === QUALITY.length - 1 && Boolean(duel?.inArena());
+  }
+  async function loadBloom() {
+    bloom = 'loading';
+    try {
+      const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] = await Promise.all([
+        import('three/addons/postprocessing/EffectComposer.js'),
+        import('three/addons/postprocessing/RenderPass.js'),
+        import('three/addons/postprocessing/UnrealBloomPass.js'),
+        import('three/addons/postprocessing/OutputPass.js'),
+      ]);
+      const composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+      composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.3, 0.85));
+      composer.addPass(new OutputPass()); // แปลงสีกลับเป็น sRGB เหมือนตอนวาดตรง
+      bloom = { composer };
+      sizeBloom();
+    } catch (err) {
+      console.warn('bloom โหลดไม่ได้ วาดแบบปกติต่อ', err);
+      bloom = 'off';
+    }
+  }
+  function sizeBloom() {
+    if (!bloom?.composer) return;
+    bloom.composer.setPixelRatio(renderer.getPixelRatio());
+    bloom.composer.setSize(container.clientWidth, container.clientHeight);
+  }
+  new ResizeObserver(sizeBloom).observe(container);
+  function render() {
+    if (!wantsBloom()) return renderer.render(scene, camera);
+    if (bloom === null) loadBloom();
+    if (bloom?.composer) bloom.composer.render();
+    else renderer.render(scene, camera);
+  }
   function cycleQuality() {
     quality = (quality + 1) % QUALITY.length;
     localStorage.setItem(QUALITY_KEY, QUALITY[quality].label);
     fitCamera();
+    sizeBloom();
     onNotice(`ความละเอียด: ${QUALITY[quality].label}`);
   }
 
@@ -801,7 +844,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function tickFps(now) {
     fpsFrames += 1;
     if (now - fpsSince < 500) return;
-    if (!fpsTag.hidden) fpsTag.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsSince))} FPS · ${QUALITY[quality].label}${softwareGpu ? ' · CPU วาด (ไม่ใช้การ์ดจอ)' : ''} · ${renderer.info.render.calls} draw`; // draw = จำนวนชิ้นที่สั่งวาดต่อเฟรม (ยิ่งเยอะยิ่งหนัก)
+    if (!fpsTag.hidden) fpsTag.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsSince))} FPS · ${QUALITY[quality].label}${softwareGpu ? ' · CPU วาด (ไม่ใช้การ์ดจอ)' : ''}${wantsBloom() && bloom?.composer ? ' · bloom' : ''} · ${renderer.info.render.calls} draw`; // draw = จำนวนชิ้นที่สั่งวาดต่อเฟรม (ยิ่งเยอะยิ่งหนัก)
     fpsFrames = 0;
     fpsSince = now;
   }
@@ -1000,6 +1043,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       sendPose(performance.now(), true);
     },
     shake: (sec) => (shakeT = Math.max(shakeT, sec)),
+    hitStop: (sec) => (stopT = Math.max(stopT, sec)),
     // โดนตีในลาน: กระเด็นไปตามทิศที่ server คำนวณ (ชนเสาแล้วสั้นลง)
     knockback: (kx, kz, dist) => {
       const entry = me();
@@ -1024,6 +1068,9 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    // เวลาของท่าทาง/อนุภาค: ช้าลงตอน hit-stop · การเดิน/ส่งตำแหน่ง/นับเวลาใช้ dt จริงเสมอ (ไม่ให้เพี้ยนกับเครื่องอื่น)
+    const animDt = stopT > 0 ? dt * HIT_STOP_SPEED : dt;
+    stopT = Math.max(0, stopT - dt);
     tickFps(now);
     animateMusic(now);
     updateMe(dt);
@@ -1049,13 +1096,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       const groove = music && !seated && !rest && entry.speed < 0.15 && onDanceFloor(entry.pos.x, entry.pos.z) ? beats : null;
       entry.dancing = groove !== null;
       const motion = trackMotion(entry, dt, seated);
-      entry.av.update(dt, { speed: entry.speed, seated, groove, rest, ...motion });
+      entry.av.update(animDt, { speed: entry.speed, seated, groove, rest, ...motion });
     }
-    fx.update(dt);
+    fx.update(animDt);
     animateGround(now);
     kickFov(dt);
     followCamera(dt);
-    renderer.render(scene, camera);
+    render();
     placeTags(container.clientWidth, container.clientHeight);
     reportScreen();
   }
@@ -1240,6 +1287,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     // ใช้ตอน ?debug=1: ดูตำแหน่งตัวละครทุกตัว
     debug: () => [...avatars.entries()].map(([id, e]) => ({ id, me: id === myId, x: +e.pos.x.toFixed(2), y: +e.pos.y.toFixed(2), z: +e.pos.z.toFixed(2), ry: +e.ry.toFixed(2), sit: e.sit, held: e.av.held(), dancing: Boolean(e.dancing) })),
     // ใช้ตอน ?debug=1 / ทดสอบ: ย้ายตัวเราไปจุดนั้นทันที (pane ถูกซ่อน = เฟรมช้า เดินจริงไม่ทัน)
+    debugFx: () => fx, // ทดสอบเอฟเฟกต์ (เปิดได้เฉพาะ ?debug) · ประกายหายเร็วเกินกว่าจะจับภาพตอนตีจริง
     debugMove: (x, z) => {
       const entry = me();
       if (!entry) return;

@@ -469,14 +469,22 @@ export function createDuel(ctx) {
     if (ev.blocked) {
       // บล็อกได้: ไม่สะดุ้ง ประกายสีเงินแทนเลือด
       floatText(entry, `บล็อก −${ev.dmg}`, 'is-blocked');
-      fx.puff(entry.pos.x + Math.sin(entry.ry) * 0.5, entry.viewY + 1.1, entry.pos.z + Math.cos(entry.ry) * 0.5, { n: 8, spread: 2.2, up: 1.2, hex: 0xc0cbdc });
+      const bx = entry.pos.x + Math.sin(entry.ry) * 0.5;
+      const bz = entry.pos.z + Math.cos(entry.ry) * 0.5;
+      fx.puff(bx, entry.viewY + 1.1, bz, { n: 8, spread: 2.2, up: 1.2, hex: 0xc0cbdc });
+      fx.spark(bx, entry.viewY + 1.1, bz, { n: 10, speed: 6, hex: 0x9fdcff }); // ประกายฟ้าเงิน = ชนโล่/อาวุธ ไม่ใช่โดนเนื้อ
     } else {
       entry.av.flash();
       // กำลังตีอยู่ = แค่กะพริบ ไม่สะดุ้ง (เดิมท่าสะดุ้งทับท่าตีกลางคัน แขนวาร์ปกลับ ดูแปลก)
       if (!ATTACK_ANIMS.has(entry.av.gesture())) entry.av.play('flinch');
       floatText(entry, `-${ev.dmg}`);
       fx.puff(entry.pos.x, entry.viewY + 1, entry.pos.z, { n: 6, spread: 2, up: 1.5, hex: 0xe43b44 });
+      // ดาเมจมาก ประกายเยอะและแรงกว่า (มีด 6 ≈ 9 ก้อน · ค้อน 32 ≈ 22 ก้อน)
+      const heavy = Math.min(1, (ev.dmg || 0) / 32);
+      fx.spark(entry.pos.x, entry.viewY + 1.05, entry.pos.z, { n: Math.round(8 + 14 * heavy), speed: 6 + 4 * heavy, hex: 0xfff1b0 });
     }
+    // ภาพค้างแป๊บหนึ่งตอนตีเข้า (hit-stop) ให้รู้สึกว่าตีหนัก · ค้างแค่ท่าทาง/อนุภาค การเดินและ server ไม่หยุด
+    if (!reducedMotion.matches) ctx.hitStop(ev.blocked ? 0.04 : 0.05 + 0.06 * Math.min(1, (ev.dmg || 0) / 32));
     if (ev.target === ctx.myId()) {
       if (!ev.blocked) flashHurt(ev.dmg);
       ctx.knockback(ev.kx, ev.kz, ev.knock);
@@ -545,6 +553,8 @@ export function createDuel(ctx) {
     if (!entry) return;
     floatText(entry, `+${ev.gain}`, 'is-heal');
     fx.puff(entry.pos.x, entry.viewY + 1, entry.pos.z, { n: 10, spread: 1.6, up: 2, hex: 0x4ade80 });
+    fx.rise(entry.pos.x, entry.viewY + 0.1, entry.pos.z, { n: 18, radius: 0.55, hex: 0x6af0a0 });
+    fx.ring(entry.pos.x, entry.viewY, entry.pos.z, { hex: 0x4ade80, radius: 1.4, life: 0.55 });
   }
 
   function updateStamina(values) {
@@ -570,44 +580,74 @@ export function createDuel(ctx) {
 
   // ---------- รอยฟัน: แสงจางๆ ตามแนวที่อาวุธกวาดผ่าน ให้เห็นชัดว่ากำลังตี + ระยะเท่าไหร่ ----------
   // แค่ภาพ ไม่ได้ใช้ตัดสินโดน (server ตัดสิน) · ขนาดตาม range/arc ของอาวุธจริง
-  const TRAIL_LIFE = 0.22;
+  const TRAIL_LIFE = 0.26;
+  const TRAIL_SWEEP = 0.35; // สัดส่วนอายุที่ใช้กวาดเสี้ยวจนเต็ม · ที่เหลือคือค่อยๆ จาง
+  const TRAIL_SEGS = 18;
   const TRAIL_HEX = { sword: 0xeaf4ff, dagger: 0xc0cbdc, fists: 0xfee761, spear: 0x8fd3ff, shield: 0x63c7ff };
   const trails = [];
   function swingTrail(entry, weapon, kind, ry) {
     const hex = TRAIL_HEX[kind] ?? 0xffffff;
-    const mat = new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false });
+    // additive = ซ้อนแล้วสว่างขึ้นเหมือนแสงจริง · toneMapped: false ให้จ้าพอที่ bloom จะจับ
+    const glowMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+    const mats = [glowMat(hex, 0.7), glowMat(0xffffff, 0.95)];
     const group = new THREE.Group();
-    let mesh;
-    if (weapon.anim === 'stab') {
-      // หอก: ลำแสงยาวตรงไปข้างหน้า
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, weapon.range - 0.4), mat);
-      mesh.position.set(0, 0, 0.4 + (weapon.range - 0.4) / 2);
+    const meshes = [];
+    const isStab = weapon.anim === 'stab';
+    if (isStab) {
+      // หอก: ลำแสงยาวตรงไปข้างหน้า (นอก = สีอาวุธ · ใน = แกนขาวบาง)
+      const len = weapon.range - 0.4;
+      for (const [w, mat] of [[0.12, mats[0]], [0.04, mats[1]]]) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, w, len), mat);
+        m.userData.len = len;
+        meshes.push(m);
+      }
     } else {
-      // ดาบ/มีด/หมัด/โล่: เสี้ยววงตามมุมที่ฟันได้ (หมุนให้กลางเสี้ยวอยู่หน้าตัว)
+      // ดาบ/มีด/หมัด/โล่: เสี้ยววงตามมุมที่ฟันได้ (หมุนให้กลางเสี้ยวอยู่หน้าตัว) · ขอบนอกมีเส้นขาวคมๆ
       const arc = THREE.MathUtils.degToRad(weapon.arc ?? 60);
       const r = weapon.range;
-      mesh = new THREE.Mesh(new THREE.RingGeometry(r * 0.55, r, 18, 1, -Math.PI / 2 - arc / 2, arc), mat);
-      mesh.rotation.x = -Math.PI / 2;
+      for (const [r0, r1, mat] of [[r * 0.55, r, mats[0]], [r * 0.88, r * 0.97, mats[1]]]) {
+        const m = new THREE.Mesh(new THREE.RingGeometry(r0, r1, TRAIL_SEGS, 1, -Math.PI / 2 - arc / 2, arc), mat);
+        m.rotation.x = -Math.PI / 2;
+        m.geometry.setDrawRange(0, 0); // เริ่มว่าง แล้วค่อยกวาดเพิ่มทีละช่อง (index เรียงตามมุม)
+        meshes.push(m);
+      }
     }
-    group.add(mesh);
+    for (const m of meshes) group.add(m);
     group.position.set(entry.pos.x, entry.viewY + 0.95, entry.pos.z);
     group.rotation.y = ry;
     if (weapon.anim === 'slash') group.rotation.z = 0.35; // ฟันเฉียง
     scene.add(group);
-    trails.push({ group, mat, age: 0 });
+    trails.push({ group, mats, meshes, isStab, age: 0 });
+    sweepTrail(trails[trails.length - 1], 0);
   }
   function tickTrails(dt) {
     for (let i = trails.length - 1; i >= 0; i -= 1) {
       const tr = trails[i];
       tr.age += dt;
       const k = tr.age / TRAIL_LIFE;
-      tr.mat.opacity = 0.75 * (1 - k);
-      tr.group.scale.setScalar(1 + 0.15 * k);
+      sweepTrail(tr, Math.min(1, k / TRAIL_SWEEP));
+      const fade = k < TRAIL_SWEEP ? 1 : 1 - (k - TRAIL_SWEEP) / (1 - TRAIL_SWEEP);
+      tr.mats[0].opacity = 0.7 * fade;
+      tr.mats[1].opacity = 0.95 * fade;
+      tr.group.scale.setScalar(1 + 0.12 * k);
       if (k < 1) continue;
       scene.remove(tr.group);
       tr.group.traverse((o) => o.geometry?.dispose());
-      tr.mat.dispose();
+      for (const m of tr.mats) m.dispose();
       trails.splice(i, 1);
+    }
+  }
+  // กวาดรอยฟันถึงสัดส่วน p (0..1): เสี้ยววง = เพิ่มช่องที่วาด · หอก = ยืดลำแสงออกไปข้างหน้า
+  function sweepTrail(tr, p) {
+    const e = 1 - (1 - p) ** 2; // ออกตัวเร็วแล้วชะลอ เหมือนแรงเหวี่ยง
+    for (const m of tr.meshes) {
+      if (tr.isStab) {
+        const len = m.userData.len;
+        m.scale.z = Math.max(0.01, e);
+        m.position.z = 0.4 + (len * e) / 2;
+      } else {
+        m.geometry.setDrawRange(0, Math.ceil(TRAIL_SEGS * e) * 6); // 1 ช่อง = 2 สามเหลี่ยม = 6 index
+      }
     }
   }
 
@@ -892,8 +932,14 @@ export function createDuel(ctx) {
         lose.av.play('ko', { hold: true });
         fx.puff(lose.pos.x, lose.viewY + 0.4, lose.pos.z, { n: 26, spread: 4, up: 2.4, hex: 0xfeae34 });
         fx.puff(lose.pos.x, lose.viewY + 0.1, lose.pos.z, { n: 14, spread: 3, up: 0.8, hex: 0xc0cbdc });
+        fx.spark(lose.pos.x, lose.viewY + 1, lose.pos.z, { n: 40, speed: 11, hex: 0xffd27a, size: 1.4, life: 0.35 });
+        fx.rise(lose.pos.x, lose.viewY + 0.3, lose.pos.z, { n: 24, radius: 0.4, up: 2.2, hex: 0xdfe8ff, life: 1.4 });
+        fx.ring(lose.pos.x, lose.viewY, lose.pos.z, { hex: 0xfeae34, radius: 3.2, life: 0.7 });
       }
-      if (!reducedMotion.matches) ctx.shake(0.45);
+      if (!reducedMotion.matches) {
+        ctx.shake(0.45);
+        ctx.hitStop(0.22); // ท่าปิดเกมค้างนานกว่าตีปกติ ให้เป็นช็อตสำคัญ
+      }
       showBanner('FINISH!', FINISH.bannerAfter, 'is-finish');
     }
     if (!finish.shown && now >= finish.bannerAt) {
