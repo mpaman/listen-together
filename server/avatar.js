@@ -2,9 +2,10 @@
 // หน้าที่ของไฟล์นี้ = กรองข้อมูลที่ client ส่งมาให้อยู่ในกรอบ (กันส่งค่าแปลกๆ ไปพังเครื่องคนอื่น)
 
 // จำนวนตัวเลือกของแต่ละส่วน — ต้องตรงกับ public/lounge-avatar.js
-// back = ของบนหลัง (ปลอกดาบ ธนู ปีก ผ้าคลุม ...) · outfit = ลายชุด (ลายขวาง แจ็กเก็ต เอี๊ยม ฮู้ด เกราะ สูท)
-// cls = คลาสตัวละครโมเดล 3D (5 แบบ ต้องตรงกับ CLASSES ใน public/lounge-model.js)
-export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7, cls: 5 };
+// ตัวละครโมเดล 3D (public/lounge-model.js) ใช้: cls = คลาส (5 แบบ ตรงกับ CLASSES) · body = สีเสื้อ / outfit = สีผ้าคลุม (0 = สีเดิม, 1..10 = BODY_COLORS)
+// hat = 0 ของประจำตัวละคร / 1..6 หมวกแบบเก่า / 7 ไม่ใส่ · back = ของบนหลังแบบเก่า (ปลอกดาบ ธนู ปีก ผ้าคลุม ...)
+// skin / face ใช้แค่ตัวกล่องที่โชว์ระหว่างโหลด
+export const LOOK_PARTS = { body: 11, skin: 6, hat: 8, face: 4, back: 9, outfit: 11, cls: 5 };
 // ลานทั้งหมด (เวทีฟังเพลงอยู่ตรงกลาง) — ต้องตรงกับ HALF_X/HALF_Z ใน public/lounge-terrain.js
 export const ROOM_HALF_X = 24;
 export const ROOM_HALF_Z = 18;
@@ -45,7 +46,7 @@ export function cleanPose(raw) {
   };
 }
 
-export const RESTS = ['sit', 'lie', 'wai'];
+export const RESTS = ['sit', 'lie', 'hello'];
 
 export const cleanGesture = (raw) => (GESTURES.includes(raw) ? raw : null);
 

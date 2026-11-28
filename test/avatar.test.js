@@ -27,6 +27,9 @@ test('cleanLook: เก็บค่าที่ถูก แทนค่าท�
   assert.equal(cleanLook({ cls: 5 }, () => 0).cls, 0);
   // client รุ่นเก่า (ยังไม่มีของบนหลัง/ลายชุด/คลาส) → สุ่มเติมให้ ไม่ปัดทิ้งทั้งตัว
   assert.deepEqual(cleanLook({ body: 2, skin: 1, hat: 3, face: 2 }, () => 0), { body: 2, skin: 1, hat: 3, face: 2, back: 0, outfit: 0, cls: 0 });
+  // ตัวโมเดล: สีเสื้อ/ผ้าคลุม 0 = สีเดิม + 10 สี (0..10) · หมวก 7 = ไม่ใส่
+  assert.deepEqual(cleanLook({ body: 10, outfit: 10, hat: 7 }, () => 0), { body: 10, skin: 0, hat: 7, face: 0, back: 0, outfit: 10, cls: 0 });
+  assert.equal(cleanLook({ hat: 8 }, () => 0).hat, 0);
   assert.ok(inRange(cleanLook('nope')));
   assert.ok(inRange(cleanLook(null)));
 });
@@ -74,8 +77,8 @@ test('cleanPose: y = ความสูงเท้า บีบให้อย�
   assert.equal(cleanPose({ x: 0, z: 0, ry: 0 }).y, 0);
   assert.equal(cleanPose({ x: 0, y: 'up', z: 0, ry: 0 }).y, 0);
 });
-test('cleanPose: ท่าค้าง rest รับแค่ sit/lie/wai · อื่นๆ หรือไม่ส่ง → null', () => {
-  for (const kind of ['sit', 'lie', 'wai']) assert.equal(cleanPose({ x: 0, z: 0, ry: 0, rest: kind }).rest, kind);
+test('cleanPose: ท่าค้าง rest รับแค่ sit/lie/hello · อื่นๆ หรือไม่ส่ง → null', () => {
+  for (const kind of ['sit', 'lie', 'hello']) assert.equal(cleanPose({ x: 0, z: 0, ry: 0, rest: kind }).rest, kind);
   assert.equal(cleanPose({ x: 0, z: 0, ry: 0, rest: 'dance' }).rest, null);
   assert.equal(cleanPose({ x: 0, z: 0, ry: 0 }).rest, null);
 });

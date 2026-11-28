@@ -1,12 +1,13 @@
 // ตัวละครโมเดล 3D (KayKit Adventurers by Kay Lousberg · CC0 · public/models/kaykit/LICENSE.txt)
 // ใช้แทนตัวกล่องจาก lounge-avatar.js ด้วย API ชุดเดียวกัน (root/update/play/setHeld/…) → lounge.js กับ lounge-duel.js แทบไม่ต้องแก้
 // - ระหว่างโหลดไฟล์ (~3.6 MB ต่อคลาส) โชว์ตัวกล่องไปก่อน คนในห้องจะไม่หายวับ · โหลดไม่ได้ = ใช้ตัวกล่องต่อ
-// - ท่าทางมาจากคลิปในไฟล์ (76 ท่า) · ท่าที่ไม่มีคลิป (ไหว้/โบกมือ/ปรบมือ/ร้องไห้/โกรธ) หมุนกระดูกแขนเองทับท่าเดิน
+// - ท่าทางมาจากคลิปในไฟล์ (76 ท่า) · ท่าที่ไม่มีคลิป (โบกมือ/ปรบมือ/ร้องไห้/โกรธ) หมุนกระดูกแขนเองทับท่าเดิน
 // - ท่าตี/ดื่ม/ยกการ์ด ใช้แค่ "ตัวท่อนบน" (ตั้งแต่ spine ขึ้นไป) ขายังเดิน/ยืนตามจริง ไม่ไถลไปทั้งตัว
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { buildBottle, buildCrown, crownTier, createAvatar as createBoxAvatar, SEAT_HIP } from './lounge-avatar.js';
+import { BODY_COLORS, buildBottle, buildCrown, buildHat, crownTier, createAvatar as createBoxAvatar, HAT_COLORS, SEAT_HIP } from './lounge-avatar.js';
+import { buildBack } from './lounge-outfit.js';
 import { animateItem, buildItem } from './lounge-items.js';
 
 export const CLASSES = [
@@ -66,6 +67,27 @@ function punchClip(held) {
 const GESTURE_SEC = { jump: 0.8, punch: 0.5, wave: 1.6, dance: 2.4, clap: 1.4, hit: 0.8, laugh: 1.4, love: 1.4, party: 1.6, cry: 1.6, angry: 1.4, jab: 0.3, slash: 0.45, stab: 0.5, slam: 1, shoot: 0.6, cast: 0.75, flinch: 0.3, roll: 0.48, dash: 0.25, drink: 1.6, finisher: 1.5, ko: 0.9 };
 
 // ของในมือที่มีโมเดลจาก KayKit · ที่เหลือ (ค้อน/หอก/ธนู/กีตาร์/ไมค์…) ใช้ของกล่องเดิม
+// ---------- แต่งตัว (look) ----------
+// ของแต่งแบบเก่า (กล่อง) สร้างมาสำหรับหัว/ลำตัวของตัวกล่อง → วางบนกระดูกแล้วขยายให้พอดีโมเดล (หน่วยของโมเดลก่อนย่อ)
+// วัดจากโมเดลจริง 11-28: ลำตัว (mesh *_Body) กว้าง ~0.87 กลาง y ~0.82 หลัง z ~-0.33 · หัวกว้าง ~1.1 ยอดหัว y ~2.19 · กระดูก chest y 0.96 · head y 1.23
+const BACK_ANCHOR = { y: -0.14, z: -0.08, scale: 1.65 }; // ลำตัวกล่อง 0.52 × 1.65 ≈ ลำตัวโมเดล
+// ยอดหัวกล่องอยู่ที่ y 0.28 → 0.28 × 1.95 + 0.41 = ยอดหัวโมเดลพอดี แต่หัวโมเดลกลมมน หมวกแบนจะลอยตรงขอบ จึงกดลงอีก ~0.1
+const HAT_ANCHOR = { y: 0.3, scale: 1.95 };
+const HAT_OWN = 0; // หมวก/หมวกเหล็ก/ฮู้ดที่มากับตัวละคร
+const HAT_NONE = 7;
+// สีย้อม: 0 = สีเดิมของโมเดล · 1..10 = BODY_COLORS · คูณกับ texture จึงผสมกับสีขาวไว้บ้าง ลายเดิมยังเห็น
+const TINT_MIX = 0.75;
+const WHITE = new THREE.Color(0xffffff);
+function tintColor(index, out) {
+  const hex = index > 0 ? BODY_COLORS[index - 1] : undefined;
+  return hex === undefined ? out.copy(WHITE) : out.copy(WHITE).lerp(new THREE.Color(hex), TINT_MIX);
+}
+// ตัวกล่องตอนโหลด: ใช้สีใกล้เคียงกับที่เลือก (ช่วงตัวเลขของ look ใหม่ไม่ตรงกับของตัวกล่อง)
+function boxLook(look) {
+  if (!look) return look;
+  return { ...look, body: look.body > 0 ? look.body - 1 : 7, hat: look.hat > 0 && look.hat < HAT_NONE ? look.hat : 0, outfit: 0 };
+}
+
 const ITEM_MODELS = { sword: 'sword_1handed', dagger: 'dagger', shield: 'shield_square', staff: 'staff' };
 const LEFT_HAND = new Set(['shield']); // โล่ถือมือซ้ายตามที่โมเดลออกแบบมา
 
@@ -197,12 +219,15 @@ function reachHand(model, upper, lower, hand, target, pole, k) {
 
 export function createAvatar(look) {
   const root = new THREE.Group(); // lounge.js ตั้งตำแหน่ง/ทิศของตัวนี้
-  const box = createBoxAvatar(look); // ตัวกล่องระหว่างรอโหลด
+  const box = createBoxAvatar(boxLook(look)); // ตัวกล่องระหว่างรอโหลด
   root.add(box.root);
   const holder = new THREE.Group(); // ขยับเอง: ลดตัวตอนนั่ง เด้ง ย่อ เอียง หมุน
   root.add(holder);
 
   let cls = look?.cls ?? 0;
+  let curLook = look ?? {};
+  let backAnim = null; // ของบนหลังที่ขยับได้ (ปีก/ผ้าคลุม/เจ็ตแพ็ก)
+  let extras = []; // หมวก/ของบนหลังแบบเก่าที่แปะไว้ (ไว้ถอดตอนเปลี่ยนชุด)
   let m = null; // โมเดลที่พร้อมใช้ { model, mixer, base, bones, loco, guard, sockets }
   let loadToken = 0;
   let heldKind = null;
@@ -213,7 +238,8 @@ export function createAvatar(look) {
   let lieK = 0;
   let airK = 0;
   let guardK = 0;
-  let waiK = 0;
+  let helloK = 0;
+  let clean = null; // ท่าสะอาดจาก mixer (ดู saveClean)
   let squash = 0;
   let clock = Math.random() * 10;
   let flashT = 0;
@@ -225,6 +251,7 @@ export function createAvatar(look) {
       m.mixer.stopAllAction();
     }
     const model = cloneSkinned(base.scene);
+    clean = null; // กระดูกชุดใหม่ ต้องเก็บท่าสะอาดใหม่ (ถ้าค้างของโมเดลเก่า โมเดลใหม่จะไม่ถูกคืนท่า → หัวหมุนอีก)
     model.scale.setScalar(MODEL_SCALE);
     const mats = [];
     model.traverse((o) => {
@@ -263,6 +290,7 @@ export function createAvatar(look) {
       },
     };
     holder.add(model);
+    applyLook();
     box.root.visible = false;
     holder.visible = true;
     setHeld(heldKind);
@@ -281,10 +309,48 @@ export function createAvatar(look) {
   load(cls);
 
   function setLook(next) {
-    box.setLook(next);
+    curLook = next ?? {};
+    box.setLook(boxLook(next));
     const nextCls = next?.cls ?? 0;
-    if (nextCls === cls && m) return;
+    if (nextCls === cls && m) {
+      applyLook();
+      return;
+    }
     load(nextCls);
+  }
+
+  // ย้อมสีเสื้อ/ผ้าคลุม · ซ่อน/โชว์หมวกประจำตัว · แปะหมวกและของบนหลังแบบเก่า
+  function applyLook() {
+    if (!m) return;
+    const { body = 0, outfit = 0, hat = HAT_OWN, back = 0 } = curLook;
+    m.model.traverse((o) => {
+      if (!o.isMesh) return;
+      if (/_Body$/.test(o.name)) tintColor(body, o.material.color);
+      else if (/_Cape$/.test(o.name)) {
+        tintColor(outfit, o.material.color);
+        o.visible = !back; // มีของบนหลังแล้ว ซ่อนผ้าคลุมเดิม กันสองชิ้นทะลุกัน
+      } else if (/_(Hat|Helmet)$/.test(o.name)) o.visible = hat === HAT_OWN;
+    });
+    for (const o of extras) o.removeFromParent();
+    extras = [];
+    backAnim = null;
+    const { head, chest } = m.bones;
+    if (head && hat !== HAT_OWN && hat !== HAT_NONE) {
+      const anchor = new THREE.Group();
+      anchor.position.y = HAT_ANCHOR.y;
+      anchor.scale.setScalar(HAT_ANCHOR.scale);
+      buildHat(anchor, hat, HAT_COLORS[(body + hat) % HAT_COLORS.length]);
+      head.add(anchor);
+      extras.push(anchor);
+    }
+    if (chest && back) {
+      const anchor = new THREE.Group();
+      anchor.position.set(0, BACK_ANCHOR.y, BACK_ANCHOR.z);
+      anchor.scale.setScalar(BACK_ANCHOR.scale);
+      backAnim = buildBack(anchor, curLook);
+      chest.add(anchor);
+      extras.push(anchor);
+    }
   }
 
   // ---------- ของในมือ ----------
@@ -434,7 +500,7 @@ export function createAvatar(look) {
     }
     clock += dt;
     lieK = approach(lieK, rest === 'lie' ? 1 : 0, dt, 6);
-    waiK = approach(waiK, rest === 'wai' ? 1 : 0, dt, 8);
+    helloK = approach(helloK, rest === 'hello' ? 1 : 0, dt, 8);
     airK = approach(airK, air === null ? 0 : 1, dt, 14);
     guardK = approach(guardK, guardOn ? 1 : 0, dt, 16);
     squash *= Math.exp(-dt * 7);
@@ -484,7 +550,9 @@ export function createAvatar(look) {
       act.lower.setEffectiveWeight(w * (full ? 1 - g : 1));
       act.upper.setEffectiveWeight(w * (1 - g) * (1 - guardK));
     }
+    restoreClean(); // ต้องคืนท่าก่อน mixer: mixer เขียนกระดูกเฉพาะตอนค่าเปลี่ยน ถ้าไม่คืน ท่าเสริมจะสะสมทับเฟรมก่อนจนหัวหมุน
     m.mixer.update(dt);
+    saveClean();
 
     // ขยับทั้งตัวเอง: ชดเชยระดับนั่ง · ย่อตอนลงพื้น · เอียงเข้าโค้ง · เด้งตามเพลง
     const hipTarget = rest === 'sit' ? FLOOR_HIP : CHAIR_HIP;
@@ -503,7 +571,7 @@ export function createAvatar(look) {
 
     // ท่าที่ไม่มีคลิป: หมุนกระดูกแขนทับท่าเดิม
     overlayGesture();
-    overlayWai();
+    overlayHello();
     if (dancing) overlayGroove(groove);
 
     if (crown) {
@@ -512,6 +580,7 @@ export function createAvatar(look) {
       crown.position.y = CROWN_Y + Math.sin(crownT * 2.4) * 0.04;
     }
     for (const o of held) animateItem(o, clock);
+    backAnim?.(dt, { clock, speed: move, air }); // ปีกกระพือ / ผ้าคลุมปลิว / ไฟเจ็ตแพ็ก
     tickFlash(dt);
   }
 
@@ -555,10 +624,20 @@ export function createAvatar(look) {
         break;
     }
   }
-  function overlayWai() { // ไหว้: พนมมือประกบกันหน้าอก ก้มหัวนิดๆ
-    if (waiK < 0.01) return;
-    turnBone(m.model, m.bones.head, 0.2, 0, 0, waiK);
-    hands(_tL.set(0.06, 1.05, 0.5), _tR.set(-0.06, 1.05, 0.5), waiK);
+  function overlayHello() { // โบกมือทักทายค้างไว้: ยกมือขวาข้างหัว โบกช้ากว่าอีโมตโบกมือนิดหน่อย
+    if (helloK < 0.01) return;
+    hands(null, _tR.set(-0.75 + Math.sin(clock * 9) * 0.14, 1.8, 0.2), helloK);
+  }
+  // ท่าสะอาดจาก mixer ของกระดูกที่ท่าเสริม (IK/turnBone) แตะ · เก็บหลัง mixer.update แล้วคืนก่อนเฟรมถัดไป
+  // เหตุผล: PropertyMixer ของ three เขียนค่าลงกระดูกเฉพาะเมื่อค่าที่ผสมได้ต่างจากเฟรมก่อน
+  // ตอนยืนนิ่งค่ามักเท่าเดิม → กระดูกค้างค่าที่ท่าเสริมหมุนไว้ แล้วโดนหมุนซ้ำทุกเฟรม (บั๊กหัวหมุนตอนไหว้ 11-28)
+  function saveClean() {
+    const list = Object.values(m.bones).filter(Boolean);
+    clean ??= list.map((b) => ({ b, q: b.quaternion.clone() }));
+    for (const c of clean) c.q.copy(c.b.quaternion);
+  }
+  function restoreClean() {
+    if (clean) for (const c of clean) c.b.quaternion.copy(c.q);
   }
   function overlayGroove(groove) { // ยกมือโยกตามบีต
     const bounce = Math.abs(Math.sin(groove * Math.PI));

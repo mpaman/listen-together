@@ -254,7 +254,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       ry: pose.ry,
       target: { x: pose.x, y, z: pose.z, ry: pose.ry },
       sit: pose.sit ?? null,
-      rest: pose.rest ?? null, // ท่าค้าง: 'sit' นั่งพื้น / 'lie' นอน / 'wai' ไหว้ · null = ยืนปกติ
+      rest: pose.rest ?? null, // ท่าค้าง: 'sit' นั่งพื้น / 'lie' นอน / 'hello' โบกมือทักทาย · null = ยืนปกติ
       speed: 0,
       vel: { x: 0, z: 0 }, // ความเร็วจริง (m/s) ของเรา — ค่อยๆ เร่ง/ชะลอ ไม่ได้เริ่ม-หยุดทันที
       vy: 0, // ความเร็วแนวดิ่ง (กระโดด/ตก)
@@ -399,7 +399,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   const seatTaken = (index) => [...avatars.entries()].some(([id, e]) => id !== myId && e.sit === index);
 
-  // ท่าค้าง (นั่งพื้น/นอน/ไหว้ ตรงไหนก็ได้): กดครั้งแรก = ทำค้างไว้ · กดซ้ำ = เลิก · กดท่าอื่น = เปลี่ยนท่า
+  // ท่าค้าง (นั่งพื้น/นอน/โบกมือทักทาย ตรงไหนก็ได้): กดครั้งแรก = ทำค้างไว้ · กดซ้ำ = เลิก · กดท่าอื่น = เปลี่ยนท่า
   // เดิน/กระโดด/นั่งโซฟา = เลิกท่าเอง (ไม่งั้นตัวนอนไถลไปตามพื้น)
   function setRest(kind) {
     const entry = me();
@@ -1219,7 +1219,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     KeyE: toggleSit,
     KeyC: () => setRest('sit'),
     KeyZ: () => setRest('lie'),
-    KeyH: () => setRest('wai'),
+    KeyH: () => setRest('hello'),
     KeyG: dropHeld,
     Equal: zoomIn, // ปุ่ม = / + ข้าง backspace
     NumpadAdd: zoomIn,

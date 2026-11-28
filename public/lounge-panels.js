@@ -1,7 +1,8 @@
 // แผงลอยบนลาน 3D: วิธีเล่น (ปุ่ม ?) · แต่งตัว · เมนูประลอง · ตั้งค่าปุ่ม
 // เปิดได้ทีละแผง · Esc/ปุ่ม X ปิดแล้วคืน focus ให้ปุ่มที่กดเปิด · ไม่ปิดเมื่อคลิกฉาก (แต่งตัวอยู่ก็หมุนกล้องดูตัวเองได้)
 import { cleanLoadout, SHIELD, STAMINA, WEAPONS, WEAPON_KINDS } from './arena-rules.js';
-import { LOOK_PARTS } from './lounge-avatar.js';
+import { BODY_COLORS, LOOK_PARTS } from './lounge-avatar.js';
+import { BACK_NAMES } from './lounge-outfit.js';
 import { CLASSES } from './lounge-model.js';
 import { KEY_ACTIONS, canBind, keyLabel, keyOf, labelOf, mouseSwapped, onKeysChange, resetKeys, setKey, setMouseSwap } from './keybinds.js';
 
@@ -10,9 +11,17 @@ export const desktopQuery = matchMedia('(hover: hover) and (pointer: fine)');
 export const isDesktop = () => desktopQuery.matches;
 
 // ส่วนที่เลือกได้ในหน้าแต่งตัว (ลำดับ = ลำดับแถว)
-// ตัวละครเป็นโมเดล 3D แล้ว (Man 11-28 เลือก: เลือกคลาสจาก 5 แบบ) · สี/หมวก/หน้าของตัวกล่องเดิมไม่ได้โชว์แล้วจึงเอาออก
+// ตัวละครเป็นโมเดล 3D (Man 11-28: เลือกคลาส 5 แบบ แล้วแต่งต่อได้แบบตัวกล่องเดิม) · ความหมายของตัวเลขดู lounge-model.js § แต่งตัว
+// หน้า/สีผิวไม่มีแล้ว: หน้าโมเดลวาดอยู่ใน texture เดียวกับผม ย้อมสีผิวจะย้อมผมกับตาไปด้วย
+const COLOR_NAMES = ['สีเดิม', 'แดง', 'ฟ้า', 'เขียว', 'เหลืองทอง', 'ม่วงชมพู', 'ฟ้าอ่อน', 'ส้ม', 'เทา', 'เขียวเข้ม', 'ม่วงเข้ม'];
+const HAT_NAMES = ['ของตัวละคร', 'หมวกไหมพรม', 'หมวกแก๊ป', 'หมวกปาร์ตี้', 'หูแมว', 'หูฟัง', 'มงกุฎ', 'ไม่ใส่'];
+const colorSwatch = (i) => (i > 0 ? `#${BODY_COLORS[i - 1].toString(16).padStart(6, '0')}` : null);
 const PARTS = [
   { key: 'cls', label: 'ตัวละคร', names: CLASSES.map((c) => c.name) },
+  { key: 'body', label: 'สีเสื้อ', names: COLOR_NAMES, swatch: colorSwatch },
+  { key: 'outfit', label: 'สีผ้าคลุม', names: COLOR_NAMES, swatch: colorSwatch },
+  { key: 'hat', label: 'หมวก', names: HAT_NAMES },
+  { key: 'back', label: 'ของบนหลัง', names: BACK_NAMES },
 ];
 
 // ---------- วิธีเล่น ----------
@@ -327,7 +336,8 @@ export function createPanels({ getLook, setLook, randomLook }) {
     const look = getLook();
     rows.innerHTML = PARTS.map((part) => {
       const i = look[part.key] ?? 0;
-      const swatch = part.swatch ? `<i class="swatch" style="background:${part.swatch(i)}"></i>` : '';
+      const color = part.swatch?.(i);
+      const swatch = color ? `<i class="swatch" style="background:${color}"></i>` : '';
       return `<div class="wardrobe-row" data-part="${part.key}">
         <span class="wardrobe-label" id="wl-${part.key}">${part.label}</span>
         <button type="button" class="icon-btn" data-step="-1" aria-label="${part.label}ก่อนหน้า">${icon('i-chevron-left')}</button>

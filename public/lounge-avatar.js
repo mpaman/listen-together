@@ -7,12 +7,12 @@ import { buildBack, decorateOutfit, outfitColors } from './lounge-outfit.js';
 
 // back = ของบนหลัง · outfit = ลายชุด (รายละเอียดอยู่ใน lounge-outfit.js)
 // cls = คลาสตัวละครโมเดล 3D (lounge-model.js CLASSES) · ส่วนอื่นใช้กับตัวกล่องที่โชว์ระหว่างโหลดโมเดล
-export const LOOK_PARTS = { body: 10, skin: 6, hat: 7, face: 4, back: 9, outfit: 7, cls: 5 };
+export const LOOK_PARTS = { body: 11, skin: 6, hat: 8, face: 4, back: 9, outfit: 11, cls: 5 };
 // จานสีแนวเกมเก่า (ENDESGA 32)
 export const BODY_COLORS = [0xe43b44, 0x0099db, 0x63c74d, 0xfeae34, 0xb55088, 0x2ce8f5, 0xf77622, 0x8b9bb4, 0x3e8948, 0x68386c];
 export const SKIN_COLORS = ['#f6c79e', '#e4a672', '#c28569', '#b86f50', '#733e39', '#ffe0c2'];
 const HAIR_COLORS = [0x3e2731, 0x181425, 0x733e39, 0xbe4a2f, 0xfeae34, 0x262b44];
-const HAT_COLORS = [0x262b44, 0xe43b44, 0x0099db, 0xfeae34, 0xb55088];
+export const HAT_COLORS = [0x262b44, 0xe43b44, 0x0099db, 0xfeae34, 0xb55088];
 const SHOES = 0x181425;
 
 export const SEAT_HIP = 0.45; // ความสูงสะโพกตอนยืน (ใช้คำนวณตอนนั่ง)
@@ -89,7 +89,7 @@ function faceTexture(kind, skin, blink) {
 }
 
 // ---------- หมวก (ติดกับหัว: ด้านบนของหัวอยู่ที่ y = 0.28) ----------
-function buildHat(head, kind, color) {
+export function buildHat(head, kind, color) {
   const m = mat(color);
   switch (kind) {
     case 1: // หมวกไหมพรม + ปอมปอม
@@ -352,7 +352,7 @@ export function createAvatar(look) {
   let restKind = null;
   let restK = 0;
   function applyRest(dt, rest) {
-    const want = rest === 'lie' || rest === 'wai';
+    const want = rest === 'lie' || rest === 'hello';
     if (want) restKind = rest;
     restK += ((want ? 1 : 0) - restK) * (1 - Math.exp(-dt * 8));
     if (!want && restK < 0.01) restKind = null;
@@ -367,11 +367,8 @@ export function createAvatar(look) {
       parts.armL.rotation.set(mix(parts.armL.rotation.x, -2.8), 0, mix(parts.armL.rotation.z, -0.45));
       parts.armR.rotation.set(mix(parts.armR.rotation.x, -2.8), 0, mix(parts.armR.rotation.z, 0.45));
       parts.head.rotation.x = mix(parts.head.rotation.x, 0.2);
-    } else { // ไหว้: พนมมือระดับอก ก้มหัวนิดๆ
-      parts.armL.rotation.set(mix(parts.armL.rotation.x, -1.35), 0, mix(parts.armL.rotation.z, 0.62));
-      parts.armR.rotation.set(mix(parts.armR.rotation.x, -1.35), 0, mix(parts.armR.rotation.z, -0.62));
-      parts.head.rotation.x = mix(parts.head.rotation.x, 0.22);
-      body.rotation.x += 0.06 * k;
+    } else { // โบกมือทักทายค้างไว้: ยกแขนขวาเหนือหัวแล้วโบกไปมา
+      parts.armR.rotation.set(mix(parts.armR.rotation.x, 0), 0, mix(parts.armR.rotation.z, 2.6 + Math.sin(clock * 9) * 0.35));
     }
   }
 
@@ -391,7 +388,7 @@ export function createAvatar(look) {
   // ทุกเฟรมคืนท่าเริ่มต้นก่อน แล้วค่อยใส่ท่า
   // groove = ตำแหน่งในจังหวะเพลง 0..1 (ทุกคนในฟลอร์ใช้ค่าเดียวกันจากนาฬิกาเครื่อง → โยกพร้อมกัน) · null = ไม่โยก
   // air = null (ยืนพื้น) หรือ -1..1 (ลอย: + พุ่งขึ้น / − ร่วงลง) · lean = -1..1 เลี้ยวซ้าย(+)/ขวา(−) → เอียงเข้าโค้ง
-  // rest = ท่าค้าง 'lie' (นอนหงาย) / 'wai' (ไหว้) · 'sit' นั่งพื้นมากับ seated แล้ว
+  // rest = ท่าค้าง 'lie' (นอนหงาย) / 'hello' (โบกมือทักทาย) · 'sit' นั่งพื้นมากับ seated แล้ว
   function update(dt, { speed = 0, seated = false, groove = null, air = null, lean = 0, rest = null } = {}) {
     if (parts.crown) { // มงกุฎหมุนช้าๆ ลอยขึ้นลงนิดๆ ให้รู้ว่าเป็นของพิเศษ
       crownT += dt;
