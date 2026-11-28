@@ -6,8 +6,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { BODY_COLORS, buildBottle, buildCrown, buildHat, crownTier, createAvatar as createBoxAvatar, HAT_COLORS, SEAT_HIP } from './lounge-avatar.js';
-import { buildBack } from './lounge-outfit.js';
+import { BODY_COLORS, buildBottle, buildCrown, crownTier, createAvatar as createBoxAvatar, HAT_COLORS, SEAT_HIP } from './lounge-avatar.js';
+import { buildGearBack, buildGearHat } from './lounge-gear.js';
 import { animateItem, buildItem } from './lounge-items.js';
 
 export const CLASSES = [
@@ -66,13 +66,8 @@ function punchClip(held) {
 // ระยะเวลาเริ่มต้น (ใช้เมื่อผู้เรียกไม่ส่ง sec มา) · ท่าอาวุธ server ส่งความยาวตาม windup มาเอง
 const GESTURE_SEC = { jump: 0.8, punch: 0.5, wave: 1.6, dance: 2.4, clap: 1.4, hit: 0.8, laugh: 1.4, love: 1.4, party: 1.6, cry: 1.6, angry: 1.4, jab: 0.3, slash: 0.45, stab: 0.5, slam: 1, shoot: 0.6, cast: 0.75, flinch: 0.3, roll: 0.48, dash: 0.25, drink: 1.6, finisher: 1.5, ko: 0.9 };
 
-// ของในมือที่มีโมเดลจาก KayKit · ที่เหลือ (ค้อน/หอก/ธนู/กีตาร์/ไมค์…) ใช้ของกล่องเดิม
 // ---------- แต่งตัว (look) ----------
-// ของแต่งแบบเก่า (กล่อง) สร้างมาสำหรับหัว/ลำตัวของตัวกล่อง → วางบนกระดูกแล้วขยายให้พอดีโมเดล (หน่วยของโมเดลก่อนย่อ)
-// วัดจากโมเดลจริง 11-28: ลำตัว (mesh *_Body) กว้าง ~0.87 กลาง y ~0.82 หลัง z ~-0.33 · หัวกว้าง ~1.1 ยอดหัว y ~2.19 · กระดูก chest y 0.96 · head y 1.23
-const BACK_ANCHOR = { y: -0.14, z: -0.08, scale: 1.65 }; // ลำตัวกล่อง 0.52 × 1.65 ≈ ลำตัวโมเดล
-// ยอดหัวกล่องอยู่ที่ y 0.28 → 0.28 × 1.95 + 0.41 = ยอดหัวโมเดลพอดี แต่หัวโมเดลกลมมน หมวกแบนจะลอยตรงขอบ จึงกดลงอีก ~0.1
-const HAT_ANCHOR = { y: 0.3, scale: 1.95 };
+// หมวก/ของบนหลังปั้นใหม่แบบโค้งใน lounge-gear.js (ไม่เอาของกล่องจากตัวเก่ามาขยายแล้ว — Man 11-28 ไม่อยากให้เหลี่ยม)
 const HAT_OWN = 0; // หมวก/หมวกเหล็ก/ฮู้ดที่มากับตัวละคร
 const HAT_NONE = 7;
 // สีย้อม: 0 = สีเดิมของโมเดล · 1..10 = BODY_COLORS · คูณกับ texture จึงผสมกับสีขาวไว้บ้าง ลายเดิมยังเห็น
@@ -88,6 +83,7 @@ function boxLook(look) {
   return { ...look, body: look.body > 0 ? look.body - 1 : 7, hat: look.hat > 0 && look.hat < HAT_NONE ? look.hat : 0, outfit: 0 };
 }
 
+// ของในมือที่มีโมเดลจาก KayKit · ที่เหลือ (ค้อน/หอก/ธนู/กีตาร์/ไมค์…) ใช้ของกล่องเดิม
 const ITEM_MODELS = { sword: 'sword_1handed', dagger: 'dagger', shield: 'shield_square', staff: 'staff' };
 const LEFT_HAND = new Set(['shield']); // โล่ถือมือซ้ายตามที่โมเดลออกแบบมา
 
@@ -319,6 +315,16 @@ export function createAvatar(look) {
     load(nextCls);
   }
 
+  // ชุดแต่งสร้าง geometry/วัสดุใหม่ทุกครั้ง → ถอดแล้วคืนหน่วยความจำ GPU (กดเปลี่ยนชุดรัวๆ ในตู้จะได้ไม่บวม)
+  function disposeGear(obj) {
+    obj.removeFromParent();
+    obj.traverse((o) => {
+      if (!o.isMesh) return;
+      o.geometry.dispose();
+      o.material.dispose();
+    });
+  }
+
   // ย้อมสีเสื้อ/ผ้าคลุม · ซ่อน/โชว์หมวกประจำตัว · แปะหมวกและของบนหลังแบบเก่า
   function applyLook() {
     if (!m) return;
@@ -331,25 +337,20 @@ export function createAvatar(look) {
         o.visible = !back; // มีของบนหลังแล้ว ซ่อนผ้าคลุมเดิม กันสองชิ้นทะลุกัน
       } else if (/_(Hat|Helmet)$/.test(o.name)) o.visible = hat === HAT_OWN;
     });
-    for (const o of extras) o.removeFromParent();
+    for (const o of extras) disposeGear(o);
     extras = [];
     backAnim = null;
     const { head, chest } = m.bones;
     if (head && hat !== HAT_OWN && hat !== HAT_NONE) {
-      const anchor = new THREE.Group();
-      anchor.position.y = HAT_ANCHOR.y;
-      anchor.scale.setScalar(HAT_ANCHOR.scale);
-      buildHat(anchor, hat, HAT_COLORS[(body + hat) % HAT_COLORS.length]);
-      head.add(anchor);
-      extras.push(anchor);
+      const gear = buildGearHat(hat, HAT_COLORS[(body + hat) % HAT_COLORS.length]);
+      head.add(gear);
+      extras.push(gear);
     }
     if (chest && back) {
-      const anchor = new THREE.Group();
-      anchor.position.set(0, BACK_ANCHOR.y, BACK_ANCHOR.z);
-      anchor.scale.setScalar(BACK_ANCHOR.scale);
-      backAnim = buildBack(anchor, curLook);
-      chest.add(anchor);
-      extras.push(anchor);
+      const gear = buildGearBack(back, body + back);
+      chest.add(gear.group);
+      extras.push(gear.group);
+      backAnim = gear.anim;
     }
   }
 

@@ -89,7 +89,7 @@ function faceTexture(kind, skin, blink) {
 }
 
 // ---------- หมวก (ติดกับหัว: ด้านบนของหัวอยู่ที่ y = 0.28) ----------
-export function buildHat(head, kind, color) {
+function buildHat(head, kind, color) {
   const m = mat(color);
   switch (kind) {
     case 1: // หมวกไหมพรม + ปอมปอม
