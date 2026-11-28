@@ -139,6 +139,10 @@ function buildHud(container) {
   const vignette = document.createElement('div');
   vignette.className = 'duel-vignette';
   vignette.setAttribute('aria-hidden', 'true');
+  // ขอบจอแดงวาบตอนเราโดนตี (คนละชั้นกับขอบแดงเลือดน้อย ที่ค้างตามเลือด · อันนี้วาบแล้วหาย)
+  const hurt = document.createElement('div');
+  hurt.className = 'duel-hurt';
+  hurt.setAttribute('aria-hidden', 'true');
   const lockHint = document.createElement('div');
   lockHint.className = 'lock-hint';
   lockHint.hidden = true;
@@ -150,10 +154,10 @@ function buildHud(container) {
   const tip = document.createElement('div');
   tip.className = 'duel-tip';
   tip.hidden = true;
-  container.append(vignette, hud, banner, tip, kit, lockHint);
+  container.append(vignette, hurt, hud, banner, tip, kit, lockHint);
   const sides = [...hud.querySelectorAll('.duel-side')];
   return {
-    hud, banner, tip, sides, kit, lockHint, renderLockHint, vignette,
+    hud, banner, tip, sides, kit, lockHint, renderLockHint, vignette, hurt,
     potion: kit.querySelector('.duel-potion'),
     practice: kit.querySelector('.duel-practice'),
     clock: hud.querySelector('.duel-clock'),
@@ -436,9 +440,19 @@ export function createDuel(ctx) {
       fx.puff(entry.pos.x, entry.viewY + 1, entry.pos.z, { n: 6, spread: 2, up: 1.5, hex: 0xe43b44 });
     }
     if (ev.target === ctx.myId()) {
+      if (!ev.blocked) flashHurt(ev.dmg);
       ctx.knockback(ev.kx, ev.kz, ev.knock);
       if (!reducedMotion.matches) ctx.shake(0.25);
     }
+  }
+
+  // โดนตี: ขอบจอแดงวาบ · ดาเมจมากวาบเข้มกว่า (มีด 6 จางๆ · ค้อน 32 เข้มสุด) · บล็อกได้ไม่วาบ จะได้รู้ว่ากันได้
+  // ใช้ el.animate() ไม่ใช้ CSS animation: เครื่องที่ตั้งลดการเคลื่อนไหว CSS ทั้งเว็บปิด animation หมด (!important)
+  // แต่การวาบสีจางลงไม่ใช่การเคลื่อนที่ และเป็นสัญญาณว่าโดนตี จึงต้องเห็นทุกเครื่อง
+  let hurtAnim = null;
+  function flashHurt(dmg) {
+    hurtAnim?.cancel(); // โดนติดกันเร็วๆ เริ่มวาบใหม่ทุกที
+    hurtAnim = ui.hurt.animate([{ opacity: Math.min(1, 0.45 + (dmg || 0) / 40) }, { opacity: 0 }], { duration: 450, easing: 'ease-out' });
   }
 
   function swing(ev) {

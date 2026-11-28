@@ -1565,6 +1565,10 @@ kbd {
   transition: opacity 320ms ease-out;
 }
 .duel-vignette.is-critical { animation: duel-heartbeat 0.9s ease-in-out infinite; }
+.duel-hurt {
+  position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 45%, rgb(228 59 68 / 0.45) 72%, rgb(180 20 40 / 0.9) 100%);
+}
 @keyframes duel-heartbeat { 0%, 100% { filter: brightness(1); } 15% { filter: brightness(1.6); } 30% { filter: brightness(1); } 45% { filter: brightness(1.35); } }
 .duel-banner.is-result {
   top: 122px; transform: translateX(-50%); padding: 6px 16px; border-radius: 999px; /* ใต้คำแนะนำล็อกเมาส์ (top 84px) */
