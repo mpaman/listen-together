@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   act, attack, createArena, forfeit, joinQueue, leaveQueue, meleeHits, publicMatch,
-  queueNames, setPose, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
+  matchOf, MAX_MATCHES, queueNames, setPose, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
 } from '../server/duel.js';
 import {
   cleanLoadout, COUNTDOWN_MS, DEFAULT_LOADOUT, FIGHT_MS, HP_MAX, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHIELD, STAMINA, SWAP_MS, WEAPONS,
@@ -46,16 +46,37 @@ test('กดซ้ำไม่เข้าคิวสองรอบ · ยก�
   assert.deepEqual(queueNames(arena), []);
 });
 
-test('ลานไม่ว่าง → คนที่สามรอคิว แล้วได้เข้าเมื่อแมตช์ก่อนปิด', () => {
-  const { arena, t } = fighting();
+test('สู้ได้หลายคู่พร้อมกัน: คู่ที่สองเริ่มทันที · ตีกันข้ามแมตช์ไม่ได้ · จบแยกกัน', () => {
+  const { arena, match: first, t } = fighting();
   joinQueue(arena, 'c', 'C', t);
-  joinQueue(arena, 'd', 'D', t);
-  assert.deepEqual(queueNames(arena), ['C', 'D']);
+  assert.deepEqual(queueNames(arena), ['C']);
+  const res = joinQueue(arena, 'd', 'D', t);
+  assert.ok(res.match);
+  assert.equal(arena.matches.size, 2);
+  assert.equal(matchOf(arena, 'c'), res.match);
+  assert.equal(matchOf(arena, 'a'), first);
+  assert.equal(joinQueue(arena, 'c', 'C', t).error, 'กำลังประลองอยู่');
   const end = forfeit(arena, 'a', t + 10);
   assert.equal(end[0].winner, 'B');
+  assert.equal(end[0].matchId, first.id);
+  assert.equal(res.match.phase, 'countdown'); // อีกคู่ไม่โดนผลกระทบ
   const events = stepDuel(arena, t + 10 + RESULT_MS);
-  assert.deepEqual(events.map((e) => e.type), ['close', 'start']);
-  assert.deepEqual(Object.keys(arena.match.fighters), ['c', 'd']);
+  assert.deepEqual(events.filter((e) => e.type === 'close').map((e) => e.matchId), [first.id]);
+  assert.deepEqual([...arena.matches.keys()], [res.match.id]);
+});
+
+test('ลานเต็ม (ครบ MAX_MATCHES) → คนที่เหลือรอคิว แล้วได้ลงเมื่อแมตช์ไหนปิด', () => {
+  const arena = createArena();
+  for (let i = 0; i < MAX_MATCHES * 2; i += 1) joinQueue(arena, `p${i}`, `P${i}`, 0);
+  assert.equal(arena.matches.size, MAX_MATCHES);
+  joinQueue(arena, 'x', 'X', 0);
+  joinQueue(arena, 'y', 'Y', 0);
+  assert.deepEqual(queueNames(arena), ['X', 'Y']);
+  forfeit(arena, 'p0', 10);
+  const events = stepDuel(arena, 10 + RESULT_MS);
+  assert.deepEqual(events.filter((e) => e.type !== 'phase').map((e) => e.type), ['close', 'start']);
+  assert.ok(matchOf(arena, 'x'));
+  assert.deepEqual(queueNames(arena), []);
 });
 
 test('ช่วงนับถอยหลังยังตีไม่ได้', () => {
@@ -99,13 +120,12 @@ test('ลูกธนูโดนตัว · ตีนลอยสูงกว�
 });
 
 test('ตีได้หลังง้างเสร็จ เลือดลดตามดาเมจ และติด cooldown', () => {
-  const { match, t } = fighting();
+  const { arena, match, t } = fighting();
   place(match, 'a', 0, 0, 0);
   place(match, 'b', 0, 1.2, Math.PI);
   const swing = attack(match, 'a', 0, t);
   assert.equal(swing.weapon, 'fists');
   assert.equal(attack(match, 'a', 0, t + 10), null); // ยังติด cooldown
-  const arena = { match };
   assert.deepEqual(stepDuel(arena, t + 10), []); // ยังง้างไม่เสร็จ
   const events = stepDuel(arena, t + WEAPONS.fists.windup);
   const hit = events.find((e) => e.type === 'hit');
@@ -156,7 +176,7 @@ test('เลือดหมด = จบ ชนะน็อก · นับสถ
   place(match, 'b', 0, 1, Math.PI);
   attack(match, 'a', 0, t);
   const events = stepDuel(arena, t + 100);
-  assert.deepEqual(events.find((e) => e.type === 'end'), { type: 'end', winner: 'A', winnerId: 'a', reason: 'ko' });
+  assert.deepEqual(events.find((e) => e.type === 'end'), { type: 'end', winner: 'A', winnerId: 'a', reason: 'ko', matchId: match.id });
   assert.equal(match.phase, 'over');
   assert.deepEqual(winsOf(arena, ['A', 'B']), { A: 1, B: 0 });
   assert.equal(attack(match, 'b', 0, t + 2000), null); // จบแล้วตีต่อไม่ได้

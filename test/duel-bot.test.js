@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { blockedLine, BOT_LEVELS, isBotId, preferredRange, startBotMatch, tickBot } from '../server/duel-bot.js';
-import { attack, createArena, joinQueue, stepDuel } from '../server/duel.js';
+import { attack, createArena, forfeit, joinQueue, stepDuel } from '../server/duel.js';
 import { COUNTDOWN_MS, inPillar } from '../public/arena-rules.js';
 
 // สุ่มแบบกำหนดผลได้ เพื่อให้ test ซ้ำแล้วได้ผลเดิม
@@ -37,12 +37,29 @@ test('เริ่มแมตช์ NPC ได้ตอนลานว่าง
   assert.deepEqual(res.match.fighters[botId].look, LOOK);
 });
 
-test('ลานไม่ว่าง หรือระดับผิด → เริ่ม NPC ไม่ได้', () => {
+test('มีคนประลองอยู่ก็ยังสู้ NPC ได้ (หลายคนพร้อมกัน) · กำลังสู้อยู่/ระดับผิด → ไม่ได้', () => {
   const arena = createArena();
   joinQueue(arena, 'a', 'A', 0);
   joinQueue(arena, 'b', 'B', 0);
-  assert.ok(startBotMatch(arena, 'c', 'C', 'easy', 0, LOOK).error);
+  const c = startBotMatch(arena, 'c', 'C', 'normal', 0, LOOK);
+  const d = startBotMatch(arena, 'd', 'D', 'dummy', 0, LOOK);
+  assert.ok(c.match && d.match);
+  assert.notEqual(c.match.botId, d.match.botId);
+  assert.equal(arena.matches.size, 3);
+  assert.ok(startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK).error);
   assert.ok(startBotMatch(createArena(), 'c', 'C', 'god', 0, LOOK).error);
+  // บอทแต่ละแมตช์เดินของตัวเอง · ทุกเหตุการณ์บอกว่าเป็นของแมตช์ไหน
+  const events = tickBot(arena, COUNTDOWN_MS + 100, 0.05);
+  assert.deepEqual(new Set(events.filter((e) => e.type === 'pose').map((e) => e.matchId)), new Set([c.match.id, d.match.id]));
+});
+
+test('ชนะ NPC = นับชนะ (ได้มงกุฎ) · ลองอาวุธไม่นับ', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'easy', 0, LOOK);
+  stepDuel(arena, COUNTDOWN_MS);
+  match.fighters[match.botId].hp = 0;
+  forfeit(arena, match.botId, COUNTDOWN_MS + 10); // บอทแพ้ (เหมือนเลือดหมด) → คนชนะ
+  assert.equal(arena.wins.get('A'), 1);
 });
 
 test('คนที่ต่อคิวหาคู่อยู่ ไปสู้ NPC → ออกจากคิวก่อน', () => {

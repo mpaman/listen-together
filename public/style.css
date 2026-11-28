@@ -847,6 +847,13 @@ a.room-btn { text-decoration: none; }
   white-space: nowrap;
 }
 .lounge-tag.is-me .lounge-name { color: var(--amber); }
+/* จำนวนครั้งที่ชนะการประลอง หน้าชื่อ (คู่กับมงกุฎบนหัว) */
+.lounge-crown {
+  margin-right: 4px;
+  color: #feae34;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .lounge-bubble {
   position: relative;
   max-width: 200px;

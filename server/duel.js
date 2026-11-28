@@ -10,9 +10,30 @@ const MAX_Y = 6; // กระโดดในลาน (พื้นเรีย�
 const round = (v) => Math.round(v * 100) / 100;
 const wrapAngle = (a) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 
+// ห้องหนึ่งมีได้หลายแมตช์พร้อมกัน (ทุกแมตช์ใช้ลานเดียวกันบนแมพ แต่คนสู้เห็นแค่คู่ของตัวเอง)
+// จำกัดจำนวนไว้กัน server ทำงานหนักเกิน (ทุกแมตช์เดินทุก 50 ms)
+export const MAX_MATCHES = 8;
+
 export function createArena() {
-  return { queue: [], match: null, seq: 0, wins: new Map() };
+  return {
+    queue: [],
+    matches: new Map(), // id → match
+    seq: 0,
+    wins: new Map(), // ชื่อ → จำนวนครั้งที่ชนะ (ไว้ใส่มงกุฎ)
+    // แมตช์ล่าสุด (test เดิมกับโค้ดที่มีแมตช์เดียวใช้ได้เหมือนเดิม)
+    get match() {
+      return [...this.matches.values()].at(-1) ?? null;
+    },
+  };
 }
+
+// แมตช์ที่คนนี้สู้อยู่ (ไม่ได้สู้ = null)
+export function matchOf(arena, id) {
+  for (const match of arena.matches.values()) if (match.fighters[id]) return match;
+  return null;
+}
+// ติดเลขแมตช์ให้ทุกเหตุการณ์ → index.js รู้ว่าต้องส่งให้ใคร · หน้าเว็บกรองเฉพาะแมตช์ตัวเอง
+const tagged = (match, events) => events.map((e) => ({ ...e, matchId: match.id }));
 
 // ---------- คิว ----------
 // กดเข้าคิว: ถ้ามีคนรออยู่แล้วและลานว่าง → เริ่มแมตช์ทันที · คืน { queued } หรือ { match }
@@ -30,10 +51,11 @@ export function leaveQueue(arena, id) {
 }
 
 export const queueNames = (arena) => arena.queue.map((q) => q.name);
-export const isFighter = (arena, id) => Boolean(arena.match?.fighters[id]);
+export const isFighter = (arena, id) => Boolean(matchOf(arena, id));
 
+// มีคนรอครบคู่ และยังเปิดแมตช์เพิ่มได้ → จับคู่สองคนแรกในคิว
 export function startIfReady(arena, now) {
-  if (arena.match || arena.queue.length < 2) return null;
+  if (arena.matches.size >= MAX_MATCHES || arena.queue.length < 2) return null;
   return createMatch(arena, arena.queue.splice(0, 2), now);
 }
 
@@ -50,7 +72,7 @@ export function createMatch(arena, pair, now, extra = {}) {
       pose: { x: spawn.x, y: 0, z: spawn.z, ry: spawn.ry }, ...(look ? { look } : {}),
     };
   });
-  arena.match = {
+  const match = {
     id: arena.seq,
     phase: 'countdown',
     phaseAt: now,
@@ -63,7 +85,8 @@ export function createMatch(arena, pair, now, extra = {}) {
     winner: null,
     ...extra,
   };
-  return arena.match;
+  arena.matches.set(match.id, match);
+  return match;
 }
 
 const opponentOf = (match, id) => match.fighters[match.order.find((other) => other !== id)];
@@ -257,6 +280,7 @@ function finish(match, winnerId, reason, events, now = match.phaseAt) {
   match.phase = 'over';
   match.phaseAt = now;
   match.winner = winnerId ? match.fighters[winnerId].name : null;
+  match.winnerId = winnerId;
   events.push({ type: 'end', winner: match.winner, winnerId, reason });
 }
 
@@ -309,10 +333,18 @@ function moveShots(match, dt, now, events) {
   match.shots = alive;
 }
 
-// เรียกทุก ~50 ms: เปลี่ยนช่วง (นับถอยหลัง → สู้ → จบ) + ท่าที่ง้างเสร็จ + ลูกยิง · คืนรายการเหตุการณ์
+// เรียกทุก ~50 ms: เดินทุกแมตช์ในห้อง · คืนรายการเหตุการณ์ (ทุกอันมี matchId)
 export function stepDuel(arena, now, dt = 0.05) {
-  const match = arena.match;
-  if (!match) return [];
+  const events = [];
+  for (const match of [...arena.matches.values()]) events.push(...tagged(match, stepMatch(arena, match, now, dt)));
+  // แมตช์ปิดไปแล้ว → คนที่รอคิวได้ลงต่อ
+  let next;
+  while ((next = startIfReady(arena, now))) events.push({ type: 'start', match: next, matchId: next.id });
+  return events;
+}
+
+// เปลี่ยนช่วง (นับถอยหลัง → สู้ → จบ) + ท่าที่ง้างเสร็จ + ลูกยิง ของแมตช์เดียว
+function stepMatch(arena, match, now, dt) {
   const events = [];
   if (match.phase === 'countdown' && now - match.phaseAt >= COUNTDOWN_MS) {
     match.phase = 'fight';
@@ -334,30 +366,30 @@ export function stepDuel(arena, now, dt = 0.05) {
       recordWin(arena, match);
     }
     if (now - match.phaseAt >= RESULT_MS) {
-      arena.match = null;
-      events.push({ type: 'close' });
-      const next = startIfReady(arena, now);
-      if (next) events.push({ type: 'start', match: next });
+      arena.matches.delete(match.id);
+      events.push({ type: 'close', order: match.order });
     }
   }
   return events;
 }
 
-// แมตช์ซ้อมกับ NPC ไม่นับสถิติ (สถิติไว้วัดกันระหว่างคนจริง)
+// นับชนะ (ได้มงกุฎ): ชนะคนจริง หรือชนะ NPC ก็นับ · บอทชนะไม่นับ · โหมดลองอาวุธ (หุ่น) ไม่นับ
+// (Man ขอ 11-28 ให้ชนะแล้วมีมงกุฎ · เล่นคนเดียวก็ต้องได้มงกุฎจากการชนะ NPC)
 function recordWin(arena, match) {
-  if (match.winner && !match.brain) arena.wins.set(match.winner, (arena.wins.get(match.winner) ?? 0) + 1);
+  if (!match.winner || match.practice || match.winnerId === match.botId) return;
+  arena.wins.set(match.winner, (arena.wins.get(match.winner) ?? 0) + 1);
 }
+export const allWins = (arena) => Object.fromEntries(arena.wins);
 
 export const winsOf = (arena, names) => Object.fromEntries(names.map((name) => [name, arena.wins.get(name) ?? 0]));
 
 // หลุด/ออกจากห้องระหว่างประลอง → อีกฝ่ายชนะเลย · ยังอยู่ในคิว → เอาออก
 export function forfeit(arena, id, now) {
   leaveQueue(arena, id);
-  const match = arena.match;
-  if (!match?.fighters[id]) return [];
-  if (match.phase === 'over') return [];
+  const match = matchOf(arena, id);
+  if (!match || match.phase === 'over') return [];
   const events = [];
   finish(match, opponentOf(match, id).id, 'left', events, now);
   recordWin(arena, match);
-  return events;
+  return tagged(match, events);
 }

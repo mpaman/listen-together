@@ -140,7 +140,10 @@ function createTag(layer, name, isMe) {
   emote.hidden = true;
   const label = document.createElement('div');
   label.className = 'lounge-name';
-  label.textContent = isMe ? `${name} (คุณ)` : name;
+  const crown = document.createElement('span'); // 👑 จำนวนชนะ (ซ่อนถ้ายังไม่เคยชนะ)
+  crown.className = 'lounge-crown';
+  crown.hidden = true;
+  label.append(crown, isMe ? `${name} (คุณ)` : name);
   tag.append(bubble, emote, label);
   layer.append(tag);
   const timers = {};
@@ -157,6 +160,11 @@ function createTag(layer, name, isMe) {
     node: tag,
     say: (text) => flash(bubble, 'bubble', clip(text), BUBBLE_MS),
     emote: (emoji) => flash(emote, 'emote', emoji, EMOTE_MS),
+    setWins: (n) => {
+      crown.hidden = !(n > 0);
+      crown.textContent = n > 0 ? `👑${n}` : '';
+      crown.title = n > 0 ? `ชนะการประลอง ${n} ครั้ง` : '';
+    },
     remove: () => {
       Object.values(timers).forEach(clearTimeout);
       tag.remove();
@@ -204,8 +212,18 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   let camPitch = PITCH_DEFAULT;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-  const avatars = new Map(); // id → { av, tag, pos, ry, target, sit, speed, vel, vy, viewY, lastDrop }
+  const avatars = new Map(); // id → { av, tag, name, pos, ry, target, sit, speed, vel, vy, viewY, lastDrop }
   let myId = null;
+  let winsByName = {}; // ชื่อ → จำนวนชนะการประลอง (server นับตามชื่อ) → มงกุฎบนหัว
+  function applyCrown(entry) {
+    const n = winsByName[entry.name] ?? 0;
+    entry.av.setCrown(n);
+    entry.tag.setWins(n);
+  }
+  function setWins(map) {
+    winsByName = { ...(map ?? {}) };
+    for (const entry of avatars.values()) applyCrown(entry);
+  }
 
   // ---------- จัดการตัวละคร ----------
   function add({ id, name, look, pose, held }) {
@@ -218,6 +236,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const entry = {
       av,
       tag: createTag(layer, name, isMe),
+      name,
       pos: new THREE.Vector3(pose.x, y, pose.z),
       ry: pose.ry,
       target: { x: pose.x, y, z: pose.z, ry: pose.ry },
@@ -233,6 +252,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     av.root.position.copy(entry.pos);
     scene.add(av.root);
     avatars.set(id, entry);
+    applyCrown(entry);
     if (isMe) snapCamera();
   }
 
@@ -1189,15 +1209,17 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     debugDuel: () => duel.debugState(),
     debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
-    reset(list, you, items = [], match = null) {
+    reset(list, you, items = [], duels = [], wins = {}) {
       duel.close(); // ต่อใหม่ = socket ใหม่ → แมตช์เดิม (ถ้ามี) server ปรับแพ้ไปแล้ว
       for (const id of [...avatars.keys()]) remove(id);
       myId = you;
       lastSent = '';
       list.forEach(add);
       setItems(items);
-      if (match) duel.start(match); // เข้าห้องตอนมีคนประลองอยู่ → ดูแถบเลือดได้
+      setWins(wins);
+      for (const m of duels) duel.track(m); // เข้าห้องตอนมีคนประลองอยู่ → ซ่อนตัวคนที่อยู่ในลาน
     },
+    setWins,
     // เหตุการณ์ลานประลองจาก server (app.js ส่งต่อมา)
     duel: {
       start: (m) => duel.start(m),
@@ -1207,7 +1229,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       shot: (ev) => duel.shot(ev),
       shotEnd: (ev) => duel.shotEnd(ev),
       end: (ev) => duel.end(ev),
-      close: () => duel.close(),
+      close: (ev) => duel.close(ev),
       pose: (ev) => duel.pose(ev),
       act: (ev) => duel.act(ev),
       stamina: (values) => duel.stamina(values),

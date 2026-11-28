@@ -93,9 +93,9 @@ function join() {
   socket.emit('join', { room: roomId, name: $('gate-name').value, look: myLook }, (res) => {
     if (res?.error) return ui.toast(res.error);
     joined = true;
-    lounge?.reset(res.avatars ?? [], res.you, res.items ?? [], res.duel ?? null);
+    lounge?.reset(res.avatars ?? [], res.you, res.items ?? [], res.duels ?? [], res.duelWins ?? {});
     duelQueued = false;
-    renderDuelButton(res.duelQueue ?? [], Boolean(res.duel));
+    renderDuelButton(res.duelQueue ?? [], false);
     lastEventSeq = res.state.event?.seq ?? 0; // เหตุการณ์ก่อนเราเข้าห้อง ไม่ต้องเด้ง
     applyState(res.state, true);
     renderUsers(res.users);
@@ -225,7 +225,7 @@ socket.on('duel:start', (match) => {
     setGameOpen(true); // โดนจับคู่ตอนปิดเกมอยู่ → เปิดลานให้เลย
   }
   lounge?.duel.start(match);
-  renderDuelButton(duelWaiting, true);
+  renderDuelButton(duelWaiting, false); // หลายคู่สู้พร้อมกันได้ → ลานไม่เคย "ไม่ว่าง" (ยกเว้นเต็ม server จะตอบเอง)
 });
 socket.on('duel:state', (match) => lounge?.duel.state(match));
 socket.on('duel:pose', (pose) => lounge?.duel.pose(pose));
@@ -233,12 +233,15 @@ socket.on('duel:swing', (ev) => lounge?.duel.swing(ev));
 socket.on('duel:shot', (ev) => lounge?.duel.shot(ev));
 socket.on('duel:shotEnd', (ev) => lounge?.duel.shotEnd(ev));
 socket.on('duel:hit', (ev) => lounge?.duel.hit(ev));
-socket.on('duel:end', (ev) => lounge?.duel.end(ev));
+socket.on('duel:end', (ev) => {
+  lounge?.duel.end(ev);
+  if (ev.allWins) lounge?.setWins(ev.allWins); // มงกุฎผู้ชนะ
+});
 socket.on('duel:act', (ev) => lounge?.duel.act(ev));
 socket.on('duel:stamina', (values) => lounge?.duel.stamina(values));
 socket.on('duel:dodge', (ev) => lounge?.duel.dodge(ev));
-socket.on('duel:close', () => {
-  lounge?.duel.close();
+socket.on('duel:close', (ev) => {
+  lounge?.duel.close(ev ?? {});
   renderDuelButton(duelWaiting, false);
 });
 // ถูกแย่ง host: ไม่ต้องเด้งข้อความเอง — event hostStart ของห้อง ("X แย่ง host จาก Y") เด้งให้อยู่แล้ว

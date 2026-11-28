@@ -1,7 +1,7 @@
 // NPC คู่ซ้อมในลานประลอง: คิดบน server ทุก tick (ใช้กฎเดียวกับคนจริงทุกอย่าง — เก็บอาวุธ ติด cooldown โดนตีเลือดลด)
 // ความยากต่างกันที่ "ความไวในการตอบสนอง / ความแม่นในการเล็ง / โอกาสหลบ / ความเร็ว" ไม่ได้โกงดาเมจ
 // ไม่แตะ socket: คืนเหตุการณ์ให้ index.js กระจาย เหมือน duel.js
-import { act, attack, createMatch, swapWeapon } from './duel.js';
+import { act, attack, createMatch, MAX_MATCHES, matchOf, swapWeapon } from './duel.js';
 import { BODY_RADIUS, clampArena, cleanLoadout, inPillar, ROLL_DIST, ROLL_MS, SLAM_DODGE_Y, STAMINA, WEAPONS } from '../public/arena-rules.js';
 
 // kits = ชุดอาวุธ (หลัก, รอง) ที่บอทระดับนั้นสุ่มใช้
@@ -192,7 +192,8 @@ export function stepBot(match, botId, now, dt) {
 // เริ่มแมตช์ซ้อม คน vs NPC (เฉพาะตอนลานว่าง) · ไม่นับสถิติชนะ
 // level 'dummy' = โหมดลองอาวุธ (หุ่นไม่ตอบโต้ ไม่จับเวลา เลือดหมดฟื้นใหม่ · ออกเองด้วย duel:quit)
 export function startBotMatch(arena, id, name, level, now, look, rand = Math.random, loadout = undefined) {
-  if (arena.match) return { error: 'ลานไม่ว่าง มีคนประลองอยู่' };
+  if (matchOf(arena, id)) return { error: 'กำลังประลองอยู่' };
+  if (arena.matches.size >= MAX_MATCHES) return { error: 'ลานเต็ม รอแมตช์อื่นจบก่อน' };
   if (!BOT_LEVELS[level]) return { error: 'ไม่มีโหมดนี้' };
   arena.queue = arena.queue.filter((q) => q.id !== id); // ออกจากคิวหาคู่ก่อน
   const botId = `npc:${arena.seq + 1}`;
@@ -202,12 +203,14 @@ export function startBotMatch(arena, id, name, level, now, look, rand = Math.ran
   return { match };
 }
 
-// เดินบอทในแมตช์ปัจจุบัน 1 tick (เรียกก่อน stepDuel) · คืนเหตุการณ์ swing/state + ตำแหน่งบอทให้ส่งคนเล่น
+// เดินบอททุกแมตช์ 1 tick (เรียกก่อน stepDuel) · คืนเหตุการณ์ swing/state + ตำแหน่งบอทให้ส่งคนเล่น (มี matchId)
 export function tickBot(arena, now, dt) {
-  const match = arena.match;
-  if (!match?.botId || match.phase === 'over') return [];
-  const events = stepBot(match, match.botId, now, dt);
-  const f = match.fighters[match.botId];
-  events.push({ type: 'pose', id: match.botId, pose: { ...f.pose } });
+  const events = [];
+  for (const match of arena.matches.values()) {
+    if (!match.botId || match.phase === 'over') continue;
+    const own = stepBot(match, match.botId, now, dt);
+    own.push({ type: 'pose', id: match.botId, pose: { ...match.fighters[match.botId].pose } });
+    events.push(...own.map((e) => ({ ...e, matchId: match.id })));
+  }
   return events;
 }

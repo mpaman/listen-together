@@ -7,7 +7,7 @@ import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, randomLook,
 import { startBotMatch, tickBot } from './duel-bot.js';
 import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js';
 import {
-  act as duelAct, attack as duelAttack, createArena, forfeit, isFighter, joinQueue, leaveQueue, swapWeapon,
+  act as duelAct, allWins, attack as duelAttack, createArena, forfeit, isFighter, joinQueue, leaveQueue, matchOf, swapWeapon,
   publicMatch, queueNames, setPose as setDuelPose, stepDuel, winsOf,
 } from './duel.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
@@ -225,35 +225,46 @@ const STAMINA_SEND_MS = 200;
 const emitDuelQueue = (roomId, room) => io.to(roomId).emit('duel:queue', queueNames(room.arena));
 const fightersOf = (match) => match.order;
 
+// หลายแมตช์พร้อมกัน: เหตุการณ์ระหว่างสู้ส่งเฉพาะสองคนในแมตช์นั้น (ev.matchId บอกว่าแมตช์ไหน)
+// เริ่ม/จบ/ปิด ส่งทั้งห้อง → คนอื่นซ่อนตัวคนที่ไปสู้ · เด้งข้อความผล · อัปเดตมงกุฎ
 function emitDuelEvents(roomId, room, events, now) {
   for (const ev of events) {
-    const match = room.arena.match;
     if (ev.type === 'start') {
       io.to(roomId).emit('duel:start', publicMatch(ev.match, now));
       emitDuelQueue(roomId, room);
-    } else if (ev.type === 'phase') io.to(roomId).emit('duel:state', publicMatch(match, now));
-    else if (ev.type === 'hit') io.to(roomId).emit('duel:hit', ev);
-    else if (ev.type === 'shot' || ev.type === 'shotEnd') io.to(fightersOf(match)).emit(`duel:${ev.type}`, ev);
+      continue;
+    }
+    if (ev.type === 'close') {
+      io.to(roomId).emit('duel:close', { matchId: ev.matchId });
+      continue;
+    }
+    const match = room.arena.matches.get(ev.matchId);
+    if (!match) continue;
+    const fighters = io.to(fightersOf(match));
+    if (ev.type === 'phase' || ev.type === 'state') fighters.emit('duel:state', publicMatch(match, now));
+    else if (ev.type === 'hit') fighters.emit('duel:hit', ev);
+    else if (ev.type === 'shot' || ev.type === 'shotEnd') fighters.emit(`duel:${ev.type}`, ev);
     else if (ev.type === 'end') {
       const names = fightersOf(match).map((id) => match.fighters[id].name);
-      io.to(roomId).emit('duel:end', { winner: ev.winner, winnerId: ev.winnerId, reason: ev.reason, wins: match.brain ? {} : winsOf(room.arena, names) }); // แมตช์ NPC ไม่นับสถิติ
-    } else if (ev.type === 'close') io.to(roomId).emit('duel:close');
-    else if (ev.type === 'swing') io.to(fightersOf(match)).emit('duel:swing', ev);
-    else if (ev.type === 'state') io.to(roomId).emit('duel:state', publicMatch(match, now));
-    else if (ev.type === 'pose') io.to(fightersOf(match)).volatile.emit('duel:pose', { id: ev.id, ...ev.pose });
-    else if (ev.type === 'act') io.to(fightersOf(match)).emit('duel:act', { id: ev.id, act: ev.act, on: ev.on, ms: ev.ms });
-    else if (ev.type === 'dodge') io.to(roomId).emit('duel:dodge', ev);
+      io.to(roomId).emit('duel:end', {
+        matchId: match.id, winner: ev.winner, winnerId: ev.winnerId, reason: ev.reason, npc: Boolean(match.brain),
+        wins: winsOf(room.arena, names), allWins: allWins(room.arena),
+      });
+    } else if (ev.type === 'swing') fighters.emit('duel:swing', ev);
+    else if (ev.type === 'pose') fighters.volatile.emit('duel:pose', { id: ev.id, ...ev.pose });
+    else if (ev.type === 'act') fighters.emit('duel:act', { id: ev.id, act: ev.act, on: ev.on, ms: ev.ms });
+    else if (ev.type === 'dodge') fighters.emit('duel:dodge', ev);
   }
 }
 
 setInterval(() => {
   const now = Date.now();
   for (const [roomId, room] of rooms) {
-    if (!room.arena.match) continue;
+    if (!room.arena.matches.size) continue;
     const dt = DUEL_TICK_MS / 1000;
     emitDuelEvents(roomId, room, [...tickBot(room.arena, now, dt), ...stepDuel(room.arena, now, dt)], now);
-    const match = room.arena.match;
-    if (match?.phase === 'fight' && now - (match.staminaSentAt ?? 0) >= STAMINA_SEND_MS) {
+    for (const match of room.arena.matches.values()) {
+      if (match.phase !== 'fight' || now - (match.staminaSentAt ?? 0) < STAMINA_SEND_MS) continue;
       match.staminaSentAt = now;
       const values = Object.fromEntries(match.order.map((id) => [id, Math.round(match.fighters[id].stamina)]));
       // ไม่ใช้ volatile: ส่งต่อจาก duel:pose (volatile) ใน tick เดียวกัน ช่องยังเขียนไม่เสร็จ → volatile ถูกทิ้งทุกรอบ
@@ -430,8 +441,9 @@ io.on('connection', (socket) => {
     const user = { name: userName, look: cleanLook(payload?.look), pose: spawnPose(), held: null };
     room.users.set(socket.id, user);
     socket.join(roomId);
-    const duel = room.arena.match ? publicMatch(room.arena.match, Date.now()) : null;
-    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), items: groundList(room.items), you: socket.id, duel, duelQueue: queueNames(room.arena) });
+    // แมตช์ที่กำลังสู้อยู่ (ไว้ซ่อนตัวคนที่อยู่ในลาน) + จำนวนชนะของทุกคน (มงกุฎ)
+    const duels = [...room.arena.matches.values()].map((m) => publicMatch(m, Date.now()));
+    ack({ state: snapshot(room), users: userList(room), chat: room.chat, avatars: avatarList(room), items: groundList(room.items), you: socket.id, duels, duelWins: allWins(room.arena), duelQueue: queueNames(room.arena) });
     socket.to(roomId).emit('users', userList(room));
     socket.to(roomId).emit('avatar:join', avatarOf(socket.id, user));
   });
@@ -582,9 +594,12 @@ io.on('connection', (socket) => {
   });
 
   // ตำแหน่งในลาน (พิกัดในลาน) → ส่งต่อให้คู่ต่อสู้คนเดียว
-  socket.on('duel:pose', (raw) => {
+  const myMatch = () => {
     const room = roomId && rooms.get(roomId);
-    const match = room?.arena.match;
+    return room ? matchOf(room.arena, socket.id) : null;
+  };
+  socket.on('duel:pose', (raw) => {
+    const match = myMatch();
     if (!match || !allowDuelPose(Date.now())) return;
     const pose = setDuelPose(match, socket.id, raw);
     if (!pose) return;
@@ -593,8 +608,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('duel:attack', (raw) => {
-    const room = roomId && rooms.get(roomId);
-    const match = room?.arena.match;
+    const match = myMatch();
     const now = Date.now();
     if (!match || !allowAttack(now)) return;
     const swing = duelAttack(match, socket.id, raw?.ry, now);
@@ -603,17 +617,15 @@ io.on('connection', (socket) => {
 
   // สลับอาวุธหลัก/รอง (slot 0/1 · ไม่ส่ง = สลับไปอีกอัน)
   socket.on('duel:swap', (raw) => {
-    const room = roomId && rooms.get(roomId);
-    const match = room?.arena.match;
+    const match = myMatch();
     const now = Date.now();
     if (!match || !allowGesture(now)) return;
-    if (swapWeapon(match, socket.id, raw?.slot, now)) io.to(roomId).emit('duel:state', publicMatch(match, now));
+    if (swapWeapon(match, socket.id, raw?.slot, now)) io.to(match.order).emit('duel:state', publicMatch(match, now));
   });
 
   // ท่าป้องกัน/หลบ: block (ยก/ลดการ์ด) · roll (· dash ปิดไว้) → server เช็คสตามินา แล้วบอกทั้งสองคนให้เล่นท่า
   socket.on('duel:act', (raw) => {
-    const room = roomId && rooms.get(roomId);
-    const match = room?.arena.match;
+    const match = myMatch();
     const now = Date.now();
     if (!match || !allowAttack(now)) return;
     const res = duelAct(match, socket.id, raw?.type, now, raw?.on);

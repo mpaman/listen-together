@@ -126,6 +126,31 @@ function buildHat(head, kind, color) {
   }
 }
 
+// ---------- มงกุฎผู้ชนะ (ลอยเหนือหัว เหนือหมวกทุกแบบ) ----------
+// ชนะมาก มงกุฎยิ่งหรู: ทองแดง → เงิน → ทอง → ทองเพชร (min = จำนวนชนะขั้นต่ำ)
+export const CROWN_TIERS = [
+  { min: 10, name: 'ทองเพชร', color: 0xfeae34, gem: 0x2ce8f5, gems: 3, tall: 0.2 },
+  { min: 5, name: 'ทอง', color: 0xfeae34, gem: 0xe43b44, gems: 1, tall: 0.16 },
+  { min: 3, name: 'เงิน', color: 0xc0cbdc, gem: 0x0099db, gems: 1, tall: 0.13 },
+  { min: 1, name: 'ทองแดง', color: 0xb86f50, gem: null, gems: 0, tall: 0.1 },
+];
+export const crownTier = (wins) => CROWN_TIERS.find((t) => wins >= t.min) ?? null;
+const CROWN_Y = 0.85; // เหนือหัว (หมวกสูงสุดถึง ~0.71)
+function buildCrown(tier) {
+  const g = new THREE.Group();
+  const gold = mat(tier.color);
+  block(g, 0.46, 0.1, 0.46, gold, 0, 0, 0);
+  const spikes = [[-0.19, -0.19], [0.19, -0.19], [-0.19, 0.19], [0.19, 0.19], [0, 0.19], [0, -0.19], [0.19, 0], [-0.19, 0]];
+  for (const [x, z] of spikes) block(g, 0.08, tier.tall, 0.08, gold, x, 0.05 + tier.tall / 2, z);
+  if (tier.gem) {
+    const gem = new THREE.MeshBasicMaterial({ color: tier.gem }); // ไม่มีแสง → อัญมณีสว่างเสมอ
+    const faces = [[0, 0.24], [0, -0.24], [0.24, 0], [-0.24, 0]].slice(0, tier.gems === 1 ? 1 : 4);
+    for (const [x, z] of faces) block(g, 0.08, 0.07, 0.08, gem, x, 0, z);
+    if (tier.gems >= 3) block(g, 0.1, 0.1, 0.1, gem, 0, 0.05 + tier.tall + 0.05, 0); // ยอดบนสุด
+  }
+  return g;
+}
+
 // ท่าทางชั่วคราว: ชื่อท่า → ระยะเวลา (วินาที)
 const GESTURE_SEC = { jump: 0.8, punch: 0.4, wave: 1.6, dance: 2.4, clap: 1.4, hit: 0.7, laugh: 1.4, love: 1.4, party: 1.6, cry: 1.6, angry: 1.4 };
 // ท่าอาวุธในลานประลอง: ความยาวท่าตั้งตาม windup ของอาวุธ (play(type, sec)) ค่านี้เป็นค่าเริ่มต้น
@@ -149,6 +174,8 @@ export function createAvatar(look) {
   const parts = {};
   let faceKey = { kind: 0, skin: SKIN_COLORS[0] };
   let heldKind = null;
+  let crownWins = 0; // จำนวนชนะ → มงกุฎ (สร้างใหม่ทุกครั้งที่ build เปลี่ยนหัว)
+  let crownT = 0;
 
   function build(raw) {
     body.clear();
@@ -180,6 +207,18 @@ export function createAvatar(look) {
     block(parts.head, 0.6, 0.34, 0.08, hair, 0, 0.12, -0.28); // ผมด้านหลัง
     buildHat(parts.head, l.hat, HAT_COLORS[(l.body + l.hat) % HAT_COLORS.length]);
     setHeld(heldKind); // แขนถูกสร้างใหม่ → ใส่ของกลับเข้ามือ
+    setCrown(crownWins); // หัวถูกสร้างใหม่ → ใส่มงกุฎกลับ
+  }
+
+  function setCrown(wins) {
+    crownWins = Math.max(0, Math.floor(wins) || 0);
+    if (parts.crown) parts.crown.removeFromParent();
+    parts.crown = null;
+    const tier = crownTier(crownWins);
+    if (!tier || !parts.head) return;
+    parts.crown = buildCrown(tier);
+    parts.crown.position.y = CROWN_Y;
+    parts.head.add(parts.crown);
   }
 
   // ของในมือขวา: ติดที่ปลายแขน · ของยาว (ดาบ/ไมค์) ชี้ไปข้างหน้า · ของแบน (โล่/กีตาร์) ถือตั้ง
@@ -286,6 +325,11 @@ export function createAvatar(look) {
   // groove = ตำแหน่งในจังหวะเพลง 0..1 (ทุกคนในฟลอร์ใช้ค่าเดียวกันจากนาฬิกาเครื่อง → โยกพร้อมกัน) · null = ไม่โยก
   // air = null (ยืนพื้น) หรือ -1..1 (ลอย: + พุ่งขึ้น / − ร่วงลง) · lean = -1..1 เลี้ยวซ้าย(+)/ขวา(−) → เอียงเข้าโค้ง
   function update(dt, { speed = 0, seated = false, groove = null, air = null, lean = 0 } = {}) {
+    if (parts.crown) { // มงกุฎหมุนช้าๆ ลอยขึ้นลงนิดๆ ให้รู้ว่าเป็นของพิเศษ
+      crownT += dt;
+      parts.crown.rotation.y = crownT * 0.9;
+      parts.crown.position.y = CROWN_Y + Math.sin(crownT * 2.4) * 0.03;
+    }
     clock += dt;
     sitK += ((seated ? 1 : 0) - sitK) * (1 - Math.exp(-dt * 9));
     if (Math.abs(sitK - (seated ? 1 : 0)) < 0.002) sitK = seated ? 1 : 0;
@@ -533,6 +577,7 @@ export function createAvatar(look) {
     setLook: build,
     setHeld,
     setGuard,
+    setCrown,
     held: () => heldKind,
     isBusy: () => gesture !== null,
     sitAmount: () => sitK,

@@ -149,7 +149,8 @@ export function createDuel(ctx) {
   const { scene, floor, fx, camera, container, layer } = ctx;
   let arena = null; // สร้างตอนประลองครั้งแรก (คนที่ไม่เคยประลองไม่ต้องเสียเวลาสร้าง)
   const ui = buildHud(container);
-  let match = null; // publicMatch ล่าสุด
+  let match = null; // publicMatch ล่าสุดของแมตช์ที่เราสู้อยู่ (ไม่ได้สู้ = null)
+  const active = new Map(); // แมตช์ที่กำลังสู้ในห้องตอนนี้: id → ไอดีคนสู้ (ไว้ซ่อนตัวคนที่ไปอยู่ในลาน)
   let phaseEndsAt = 0; // performance.now() ที่ช่วงปัจจุบันจะหมด
   let inArena = false; // เราเป็นคนสู้อยู่
   let saved = null; // ตำแหน่ง/ของในมือในลานฟังเพลงก่อนเข้าลาน
@@ -353,23 +354,30 @@ export function createDuel(ctx) {
     return `${hit}/${labelOf('attack')} ตี · ${guard}/${labelOf('block')} บล็อก · ${labelOf('roll')} กลิ้ง · ${labelOf('lockon')} ล็อกเป้า · ${labelOf('swap')}/${labelOf('slot1')}/${labelOf('slot2')} สลับอาวุธ · ${labelOf('fullscreen')} เต็มจอ`;
   }
 
+  // แมตช์ใหม่ในห้อง: ของเรา = เข้าลาน · ของคนอื่น = แค่จำไว้ซ่อนตัวเขา + แจ้งในแชท (หลายคู่สู้พร้อมกันได้)
   function start(next) {
+    track(next);
+    if (!next.fighters.some((f) => f.id === ctx.myId())) {
+      if (!next.practice) ctx.notice(`⚔️ ${next.fighters[0].name} ปะทะ ${next.fighters[1].name} ในลานประลอง`);
+      return;
+    }
     setMatch(next);
     ui.hud.hidden = false;
-    if (fighterIds().includes(ctx.myId())) {
-      spawnNpcs();
-      enter();
-      showBanner('READY?', 900);
-      ctx.notice(next.practice
-        ? `โหมดลองอาวุธ: ตีหุ่นได้เลย · ${labelOf('swap')}/${labelOf('slot1')}/${labelOf('slot2')} สลับอาวุธ · ไม่จับเวลา · กด "ออกจากลาน" เมื่อพอ`
-        : controlsHint());
-      weaponTip(myFighter()?.weapon);
-    } else if (!next.practice) {
-      ctx.notice(`⚔️ ${next.fighters[0].name} ปะทะ ${next.fighters[1].name} ในลานประลอง`);
-    }
+    spawnNpcs();
+    enter();
+    showBanner('READY?', 900);
+    ctx.notice(next.practice
+      ? `โหมดลองอาวุธ: ตีหุ่นได้เลย · ${labelOf('swap')}/${labelOf('slot1')}/${labelOf('slot2')} สลับอาวุธ · ไม่จับเวลา · กด "ออกจากลาน" เมื่อพอ`
+      : controlsHint());
+    weaponTip(myFighter()?.weapon);
+  }
+  // เข้าห้องตอนมีคนสู้อยู่: จำไว้เฉยๆ ไม่เด้งข้อความ
+  function track(m) {
+    active.set(m.id, m.fighters.map((f) => f.id));
   }
 
   function state(next) {
+    if (!match || next.id !== match.id) return;
     const wasFight = match?.phase === 'fight';
     setMatch(next);
     if (inArena) syncHeld();
@@ -487,12 +495,15 @@ export function createDuel(ctx) {
   }
 
   function end(ev) {
-    if (!match) return;
+    const why = { ko: 'น็อก!', time: 'หมดเวลา', left: 'อีกฝ่ายออกจากห้อง' }[ev.reason] ?? '';
+    if (!match || ev.matchId !== match.id) { // แมตช์ของคนอื่น
+      ctx.notice(ev.winner ? `🏆 ${ev.winner} ชนะการประลอง (${why})` : 'การประลองจบลงด้วยผลเสมอ');
+      return;
+    }
     match.phase = 'over';
     match.winner = ev.winner;
     phaseEndsAt = performance.now() + 4000;
     const wins = Object.entries(ev.wins ?? {}).map(([name, n]) => `${name} ${n}`).join(' · ');
-    const why = { ko: 'น็อก!', time: 'หมดเวลา', left: 'อีกฝ่ายออกจากห้อง' }[ev.reason] ?? '';
     setLockOn(false);
     if (inArena) {
       // ป้ายผลกลางจอใช้ภาษาอังกฤษแบบเกมต่อสู้ (Man ขอ) · ข้อความแจ้งในแชทยังเป็นไทย
@@ -505,7 +516,13 @@ export function createDuel(ctx) {
     renderHud();
   }
 
-  function close() {
+  // ev.matchId = ปิดแมตช์ไหน · ไม่ส่ง = ล้างทั้งหมด (ต่อ socket ใหม่)
+  function close(ev) {
+    if (ev?.matchId === undefined) active.clear();
+    else {
+      active.delete(ev.matchId);
+      if (ev.matchId !== match?.id) return; // แมตช์คนอื่นปิด → แค่เลิกซ่อนตัวเขา
+    }
     leave();
     for (const f of match?.fighters ?? []) {
       if (f.npc) ctx.removeAvatar(f.id);
@@ -804,10 +821,11 @@ export function createDuel(ctx) {
     isPractice: () => Boolean(match?.practice),
     // คนดูข้างนอก: ซ่อนตัวคนสู้ (ไปอยู่ในลานแล้ว) · คนสู้: ซ่อนทุกคนยกเว้นคู่ต่อสู้
     hides: (id) => {
-      if (!match) return false;
-      const fighting = fighterIds().includes(id);
-      return inArena ? !fighting : fighting;
+      if (inArena) return !fighterIds().includes(id);
+      for (const ids of active.values()) if (ids.includes(id)) return true;
+      return false;
     },
+    track,
     // ยกการ์ด = เดินช้าลง · มึน = เดินไม่ได้
     moveScale: () => {
       if (!inArena) return 1;
