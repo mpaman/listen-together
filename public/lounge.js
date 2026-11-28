@@ -36,7 +36,8 @@ const QUALITY = [
   { label: 'คม', height: 600 },
   { label: 'คมสุด', height: Infinity },
 ];
-const QUALITY_KEY = 'lounge-quality';
+// v2 = เปลี่ยนค่าเริ่มต้นเป็นคมสุด (Man 11-28) · เปลี่ยนชื่อ key เพื่อให้เครื่องที่เคยจำ 'คม' ไว้ได้ค่าใหม่ 1 ครั้ง
+const QUALITY_KEY = 'lounge-quality-v2';
 const RUN_FOV_KICK = 5; // วิ่งแล้วมุมกล้องกว้างขึ้นนิดๆ ให้รู้สึกเร็ว
 const BASE_FOV = 40;
 const SKY = 0x2b2747;
@@ -771,7 +772,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
 
   let quality = Math.max(0, QUALITY.findIndex((q) => q.label === localStorage.getItem(QUALITY_KEY)));
-  if (localStorage.getItem(QUALITY_KEY) === null) quality = softwareGpu ? 0 : 1; // ค่าเริ่มต้น = คม (Man ขอเพิ่มความละเอียด 11-27) · ใช้ CPU วาด = 8-bit
+  if (localStorage.getItem(QUALITY_KEY) === null) quality = softwareGpu ? 0 : QUALITY.length - 1; // ค่าเริ่มต้น = คมสุด (Man 11-28) · ใช้ CPU วาด = 8-bit เพราะเต็มจอจะเหลือไม่กี่ FPS
   function fitCamera() {
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
