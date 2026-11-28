@@ -198,6 +198,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const sun = new THREE.DirectionalLight(0xffe2b0, 2.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
+  // พื้นผืนเดียวเป็น DoubleSide → หน้าที่หันหาแดดก็ลงเงาด้วย เกิดลายเส้นเงาเฉียงทั่วพื้น (shadow acne) · ดันเงาออกตาม normal นิดเดียวแก้ได้
+  sun.shadow.normalBias = 0.03;
   Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 });
   scene.add(sun, sun.target);
 

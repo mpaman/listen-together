@@ -5,6 +5,7 @@
 // ลานอยู่ในฉากเดียวกับลานฟังเพลงแต่ไกลออกไป (ARENA_ORIGIN) → หมอกบังลานฟังเพลงให้เอง ไม่ต้องสร้างฉากใหม่
 // พิกัดที่ส่งกับ server = พิกัดในลาน (กลางลาน 0,0) · ในฉาก = บวก ARENA_ORIGIN
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { buildItem, animateItem } from './lounge-items.js';
 import {
   ARENA_HALF, ARENA_MAPS, BLOCK_MOVE, BODY_RADIUS, clampArena, DASH_DIST, DASH_ENABLED, DASH_MS, HP_MAX, inPillar, obstaclesOf, POTION, RESULT_MS,
@@ -55,8 +56,71 @@ export const ARENA_LAND = {
 };
 
 const lambert = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
+const soft = (color) => new THREE.MeshLambertMaterial({ color });
+// สุ่มแบบคงที่ตามตำแหน่ง → ทุกเครื่องเห็นลายหิน/รอยแตกเหมือนกัน
+const jitter = (a, b) => {
+  const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return h - Math.floor(h);
+};
+
+// ของหลายชิ้นรูปทรงเดียวกัน ขนาด/สี/การหมุนต่างกัน → InstancedMesh เดียว
+function instancedIn(parent, geo, items, mat) {
+  const inst = new THREE.InstancedMesh(geo, mat, items.length);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  const c = new THREE.Color();
+  items.forEach((it, i) => {
+    q.setFromEuler(e.set(it.rx ?? 0, it.ry ?? 0, it.rz ?? 0));
+    inst.setMatrixAt(i, m.compose(p.set(it.x, it.y, it.z), q, s.set(it.sx ?? 1, it.sy ?? 1, it.sz ?? 1)));
+    inst.setColorAt(i, c.setHex(it.color).multiplyScalar(it.shade ?? 1));
+  });
+  inst.castShadow = inst.receiveShadow = true;
+  parent.add(inst);
+  return inst;
+}
+
+// ---------- ลูกยิง ----------
+// geometry/material ใช้ร่วมกันทุกลูก (สร้างครั้งเดียว) → ยิงรัวๆ ไม่ต้องสร้าง/คืนหน่วยความจำการ์ดจอทุกนัด
+const SHOT = {
+  shaft: new THREE.CylinderGeometry(0.018, 0.018, 0.62, 6).rotateX(Math.PI / 2),
+  head: new THREE.ConeGeometry(0.045, 0.14, 8).rotateX(Math.PI / 2),
+  fin: new THREE.PlaneGeometry(0.09, 0.16),
+  ball: new THREE.IcosahedronGeometry(0.22, 2),
+  core: new THREE.IcosahedronGeometry(0.13, 1),
+  wood: new THREE.MeshLambertMaterial({ color: 0x8f563b }),
+  steel: new THREE.MeshLambertMaterial({ color: 0xc0cbdc }),
+  feather: new THREE.MeshLambertMaterial({ color: 0xe43b44, side: THREE.DoubleSide }),
+  fire: new THREE.MeshBasicMaterial({ color: 0xf77622, transparent: true, opacity: 0.85 }),
+  fireCore: new THREE.MeshBasicMaterial({ color: 0xfee761 }),
+};
+// ลูกธนู: ก้านไม้ หัวเหล็กแหลม ขนนก 3 แฉกที่ท้าย · ชี้ไปทาง +z (shot() หมุนตามทิศที่บิน)
+function buildArrow() {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(SHOT.shaft, SHOT.wood));
+  const head = new THREE.Mesh(SHOT.head, SHOT.steel);
+  head.position.z = 0.38;
+  g.add(head);
+  for (let k = 0; k < 3; k += 1) {
+    const fin = new THREE.Mesh(SHOT.fin, SHOT.feather);
+    fin.rotation.set(0, Math.PI / 2, (k / 3) * Math.PI * 2);
+    fin.position.z = -0.24;
+    g.add(fin);
+  }
+  return g;
+}
+// ลูกไฟ: ทรงกลมส้มโปร่งครอบแกนเหลืองสว่าง
+function buildFireball() {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(SHOT.ball, SHOT.fire), new THREE.Mesh(SHOT.core, SHOT.fireCore));
+  return g;
+}
 
 // ---------- ฉากลาน ----------
+// หน้าตาโค้งมนแบบหินจริง: แผ่นปูพื้นขอบมนวางเหลื่อมนิดๆ · กำแพงก่ออิฐทีละก้อน · เสาหินลบมุม
+// ตำแหน่ง/ขนาดที่ชนยังมาจาก arena-rules.js เหมือนเดิม (แค่เปลี่ยนรูปร่างที่วาด)
 function buildArena(scene, floor, map) {
   const theme = MAP_THEMES[map] ?? MAP_THEMES.stone;
   obstacles = obstaclesOf(map);
@@ -65,68 +129,99 @@ function buildArena(scene, floor, map) {
   root.position.set(ARENA_ORIGIN.x, 0, ARENA_ORIGIN.z);
   scene.add(root);
   const size = ARENA_HALF * 2;
-  // พื้นหินลายตาราง (กระเบื้อง 1×1 สลับสี) — InstancedMesh ก้อนเดียว
-  const tiles = new THREE.InstancedMesh(new THREE.BoxGeometry(0.98, 0.2, 0.98), lambert(0xffffff), size * size);
-  const m = new THREE.Matrix4();
-  const c = new THREE.Color();
-  let i = 0;
+  const white = soft(0xffffff); // สีจริงมาจาก instance color
+
+  // พื้นแผ่นหินขอบมน: ความสูง/มุม/สีเหลื่อมกันเล็กน้อยทีละแผ่น (เหลื่อมไม่เกิน 1.5 ซม. เดินไม่สะดุด)
+  const tiles = [];
   for (let x = 0; x < size; x += 1) {
     for (let z = 0; z < size; z += 1) {
-      m.makeTranslation(x - ARENA_HALF + 0.5, -0.1, z - ARENA_HALF + 0.5);
-      tiles.setMatrixAt(i, m);
       const ring = Math.max(Math.abs(x - ARENA_HALF + 0.5), Math.abs(z - ARENA_HALF + 0.5));
-      tiles.setColorAt(i, c.setHex(ring < 2 ? theme.center : theme.tiles[(x + z) % 2])); // วงกลางสีเด่น
-      i += 1;
+      const r = jitter(x, z);
+      tiles.push({
+        x: x - ARENA_HALF + 0.5, y: -0.1 + (r - 0.5) * 0.03, z: z - ARENA_HALF + 0.5, ry: (jitter(z, x) - 0.5) * 0.06,
+        color: ring < 2 ? theme.center : theme.tiles[(x + z) % 2], shade: 0.88 + r * 0.2, // วงกลางสีเด่น
+      });
     }
   }
-  tiles.receiveShadow = true;
-  root.add(tiles);
+  instancedIn(root, new RoundedBoxGeometry(0.95, 0.2, 0.95, 2, 0.05), tiles, white).castShadow = false;
   // แผ่นมองไม่เห็นไว้ให้คลิกเดิน
   const hit = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ visible: false }));
   hit.rotation.x = -Math.PI / 2;
   root.add(hit);
   floor.push(hit);
-  // กำแพงเตี้ยรอบลาน + ฐานใต้ลาน
-  const wall = lambert(theme.wall);
-  const trim = lambert(theme.trim);
-  for (const [w, d, x, z] of [[size + 1, 0.5, 0, ARENA_HALF + 0.25], [size + 1, 0.5, 0, -ARENA_HALF - 0.25], [0.5, size, ARENA_HALF + 0.25, 0], [0.5, size, -ARENA_HALF - 0.25, 0]]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), wall);
-    b.position.set(x, 0.25, z);
-    b.castShadow = b.receiveShadow = true;
-    root.add(b);
-    const t = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.08, d + 0.02), trim);
-    t.position.set(x, 0.72, z);
-    root.add(t);
-  }
-  const base = new THREE.Mesh(new THREE.BoxGeometry(size + 6, 1, size + 6), lambert(theme.base));
+
+  // กำแพงเตี้ยรอบลาน: ก่ออิฐ 2 ชั้น ก้อนยาวไม่เท่ากัน ชั้นบนเหลื่อมรอยต่อ + แผ่นทับหลังขอบมน
+  const bricks = [];
+  const caps = [];
+  const wallSide = (len, place) => {
+    for (const [row, y] of [[0, 0.03], [1, 0.48]]) {
+      let s = -len / 2 + (row ? 0.45 : 0);
+      if (row) bricks.push(place(-len / 2 + 0.225, y, 0.43, row)); // ก้อนครึ่งหัวแถว
+      while (s < len / 2 - 0.01) {
+        const l = Math.min(len / 2 - s, 0.8 + jitter(s, row + len) * 0.5);
+        bricks.push(place(s + l / 2, y, l - 0.04, row));
+        s += l;
+      }
+    }
+    caps.push(place(0, 0.74, len + 0.1, 2));
+  };
+  const along = (axisX, fixed) => (t, y, l, row) => {
+    const base = { y, color: row === 2 ? theme.trim : theme.wall, shade: row === 2 ? 1 : 0.85 + jitter(t, fixed + row) * 0.3 };
+    return axisX ? { ...base, x: t, z: fixed, sx: l } : { ...base, x: fixed, z: t, sx: l, ry: Math.PI / 2 };
+  };
+  wallSide(size + 1, along(true, ARENA_HALF + 0.25));
+  wallSide(size + 1, along(true, -ARENA_HALF - 0.25));
+  wallSide(size, along(false, ARENA_HALF + 0.25));
+  wallSide(size, along(false, -ARENA_HALF - 0.25));
+  instancedIn(root, new RoundedBoxGeometry(1, 0.43, 0.5, 2, 0.07), bricks, white);
+  instancedIn(root, new RoundedBoxGeometry(1, 0.1, 0.58, 2, 0.04), caps, white);
+
+  // ฐานใต้ลาน (หน้าผาหินรอบลาน)
+  const base = new THREE.Mesh(new RoundedBoxGeometry(size + 6, 1, size + 6, 3, 0.35), soft(theme.base));
   base.position.y = -0.7;
   base.receiveShadow = true;
   root.add(base);
-  // สิ่งกีดขวาง (ที่หลบลูกยิง) + ของบนหัวตามแผนที่ + คบไฟมุมลาน
-  const blockMat = lambert(theme.block);
-  const capMat = lambert(theme.cap);
-  const add = (w, h, d, mat, x, y, z) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+
+  // สิ่งกีดขวาง (ที่หลบลูกยิง): เสาหินลบมุม + ของบนหัวตามแผนที่ + เศษหิน
+  const blockMat = soft(theme.block);
+  const capMat = soft(theme.cap);
+  const add = (geo, mat, x, y, z, ry = 0) => {
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y, z);
+    mesh.rotation.y = ry;
     mesh.castShadow = mesh.receiveShadow = true;
     root.add(mesh);
+    return mesh;
   };
+  const rbox = (w, h, d, r = 0.12) => new RoundedBoxGeometry(w, h, d, 3, Math.min(r, Math.min(w, h, d) * 0.45));
+  const rubble = [];
   for (const p of obstacles) {
-    add(p.sx * 2, p.h, p.sz * 2, blockMat, p.x, p.h / 2, p.z);
-    if (theme.capStyle === 'slab') add(p.sx * 2 + 0.2, 0.2, p.sz * 2 + 0.2, capMat, p.x, p.h, p.z);
-    else if (theme.capStyle === 'snow') add(p.sx * 2 + 0.1, 0.18, p.sz * 2 + 0.1, capMat, p.x, p.h + 0.02, p.z);
-    else { // ซากปราสาท: ยอดแตกเป็นก้อนเล็กไม่เท่ากัน + เศษหินตกข้างฐาน
-      add(p.sx, 0.35, p.sz, capMat, p.x - p.sx / 2, p.h + 0.17, p.z - p.sz / 2);
-      add(p.sx * 0.6, 0.6, p.sz * 0.6, blockMat, p.x + p.sx * 0.5, p.h + 0.3, p.z + p.sz * 0.4);
-      add(0.3, 0.25, 0.3, capMat, p.x + p.sx + 0.3, 0.12, p.z - p.sz * 0.3);
+    add(rbox(p.sx * 2, p.h, p.sz * 2), blockMat, p.x, p.h / 2, p.z);
+    if (theme.capStyle === 'slab') {
+      add(rbox(p.sx * 2 + 0.2, 0.2, p.sz * 2 + 0.2, 0.07), capMat, p.x, p.h, p.z);
+    } else if (theme.capStyle === 'snow') {
+      // หิมะคลุมหัว: แผ่นมนหนาๆ + กองหิมะโป่งๆ ตรงกลาง + หิมะกองที่โคนเสา
+      add(rbox(p.sx * 2 + 0.12, 0.2, p.sz * 2 + 0.12, 0.09), capMat, p.x, p.h + 0.04, p.z);
+      add(new THREE.SphereGeometry(Math.min(p.sx, p.sz) * 0.9, 16, 10).scale(p.sx / Math.min(p.sx, p.sz), 0.35, p.sz / Math.min(p.sx, p.sz)), capMat, p.x, p.h + 0.12, p.z);
+      add(new THREE.SphereGeometry(0.5, 14, 8).scale(p.sx * 2.4, 0.3, p.sz * 2.4), capMat, p.x, 0, p.z);
+    } else { // ซากปราสาท: ยอดแตกเป็นก้อนเล็กไม่เท่ากัน + เศษหินตกข้างฐาน
+      add(rbox(p.sx, 0.35, p.sz, 0.08), capMat, p.x - p.sx / 2, p.h + 0.17, p.z - p.sz / 2, 0.08);
+      add(rbox(p.sx * 0.6, 0.6, p.sz * 0.6, 0.1), blockMat, p.x + p.sx * 0.5, p.h + 0.3, p.z + p.sz * 0.4, -0.12);
+      for (let k = 0; k < 4; k += 1) {
+        const a = jitter(p.x + k, p.z) * Math.PI * 2;
+        const s = 0.18 + jitter(p.z, p.x + k) * 0.2;
+        rubble.push({ x: p.x + Math.cos(a) * (p.sx + 0.35), y: s * 0.3, z: p.z + Math.sin(a) * (p.sz + 0.35), sx: s * 1.3, sy: s * 0.8, sz: s, rx: a, ry: a * 2, color: k % 2 ? theme.cap : theme.block });
+      }
     }
   }
+  if (rubble.length) instancedIn(root, new THREE.DodecahedronGeometry(0.5, 0), rubble, lambert(0xffffff));
+
   const flames = [];
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
       const torch = buildItem('torch');
       torch.scale.setScalar(2);
-      torch.position.set(sx * (ARENA_HALF + 0.25), 0.7, sz * (ARENA_HALF + 0.25));
+      torch.position.set(sx * (ARENA_HALF + 0.25), 0.78, sz * (ARENA_HALF + 0.25));
       root.add(torch);
       flames.push(torch);
     }
@@ -673,9 +768,7 @@ export function createDuel(ctx) {
     if (!inArena) return;
     const w = toWorld(ev.x, ev.z);
     const isFire = ev.kind === 'staff';
-    const mesh = isFire
-      ? new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 0.45), new THREE.MeshBasicMaterial({ color: 0xf77622 }))
-      : new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    const mesh = isFire ? buildFireball() : buildArrow();
     mesh.position.set(w.x, ev.y, w.z);
     mesh.rotation.y = Math.atan2(ev.vx, ev.vz);
     scene.add(mesh);
