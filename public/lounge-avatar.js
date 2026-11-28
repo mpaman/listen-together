@@ -429,25 +429,33 @@ export function createAvatar(look) {
     const hp = gesture.hit ?? 0.35;
     const rel = p <= hp ? 0 : (p - hp) / (1 - hp);
     const wind = ease(Math.min(1, p / hp));
-    const pre = p <= hp ? wind : 1 - ease(Math.min(1, rel * 4));
-    const strike = p <= hp ? 0 : ease(Math.min(1, rel * 5)) * (1 - ease(Math.min(1, Math.max(0, rel - 0.25) / 0.6)));
+    // ปล่อยท่าช้าลงกว่าเดิม (เดิม rel*4 / rel*5 → ดาบกระตุก 1 rad ในเฟรมเดียว ดูวาร์ป)
+    const pre = p <= hp ? wind : 1 - ease(Math.min(1, rel * 2.6));
+    const strike = p <= hp ? 0 : ease(Math.min(1, rel * 3)) * (1 - ease(Math.min(1, Math.max(0, rel - 0.35) / 0.6)));
+    // โน้มตัวไปข้างหน้าตอนฟัน: ขยับแค่ "ตัวในโมเดล" ตัวจริงไม่เลื่อน (Man ขอ 11-28: ไม่พุ่งไปหาเป้า จะได้หลบต่อได้)
+    const lunge = (back, fwd) => {
+      body.position.z += -back * pre + fwd * strike;
+      body.rotation.x += -0.4 * back * pre + 0.6 * fwd * strike;
+    };
     switch (gesture.type) {
-      case 'jab': // ต่อย/แทงมีดสลับมือ: ดึงหมัดกลับนิดนึง แล้วพุ่ง
-        parts.armR.rotation.set((-Math.PI / 2) * (0.3 * pre + strike) + 0.25 * pre, 0, 0);
-        parts.armL.rotation.set(-0.6 * strike, 0, -0.1);
-        body.rotation.y = 0.15 * pre - 0.3 * strike;
+      case 'jab': // ต่อย/มีด/กระแทกโล่: ดึงแขนกลับ บิดไหล่ แล้วยื่นสุดแขนตรงไปข้างหน้า
+        parts.armR.rotation.set(0.45 * pre - 1.62 * strike, 0, 0.1 * pre);
+        parts.armL.rotation.set(-0.7 * pre + 0.35 * strike, 0, -0.15);
+        body.rotation.y = 0.3 * pre - 0.4 * strike;
+        lunge(0.06, 0.2);
         break;
-      case 'slash': // ดาบ: ยกขึ้นเหนือหัว บิดตัวไปหลัง แล้วฟันเฉียงลงพร้อมบิดตัวกลับ
-        parts.armR.rotation.set(-2.8 * pre + 0.5 * strike, 0, 0.3 - 0.5 * strike);
-        body.rotation.y = 0.35 * pre - 0.5 * strike;
-        body.position.z += 0.15 * strike;
+      case 'slash': // ดาบ: ง้างขึ้นเฉียงด้านขวาเหนือไหล่ → ฟันเฉียงตัดผ่านหน้าตัวไปซ้ายล่าง (ไม่ฟันลงไปหลังสะโพกแบบเดิม)
+        parts.armR.rotation.set(-2.3 * pre - 1.25 * strike, 0, 0.75 * pre - 0.85 * strike);
+        parts.armL.rotation.set(-0.3 * pre, 0, -0.25 - 0.25 * strike);
+        body.rotation.y = 0.5 * pre - 0.55 * strike;
+        lunge(0.05, 0.22);
         break;
-      case 'stab': // หอก: ดึงหลัง แล้วแทงตรงไปข้างหน้า
-        parts.armR.rotation.set(-1.5, 0, 0);
+      case 'stab': // หอก: ดึงด้ามกลับ แล้วแทงสุดแขนตรงไปข้างหน้า
+        parts.armR.rotation.set(-1.45 - 0.1 * strike, 0, 0);
         parts.armL.rotation.set(-1.3, 0, 0.3);
-        if (parts.held) parts.held.position.y = -0.47 + 0.35 * pre - 0.45 * strike;
-        body.position.z += -0.12 * pre + 0.3 * strike;
-        body.rotation.x = 0.15 * strike;
+        if (parts.held) parts.held.position.y = -0.47 + 0.35 * pre - 0.55 * strike;
+        body.rotation.y = 0.2 * pre - 0.15 * strike;
+        lunge(0.12, 0.32);
         if (p >= 1 && parts.held) parts.held.position.y = -0.47;
         break;
       case 'slam': { // ค้อน: สองมือยกสูง ตัวแอ่นไปหลัง → ทุบพื้นเต็มแรง
@@ -459,15 +467,20 @@ export function createAvatar(look) {
         body.position.y -= 0.12 * down;
         break;
       }
-      case 'shoot': // ธนู: ยื่นแขนซ้าย ง้างสายด้วยแขนขวา แล้วปล่อย
-        parts.armR.rotation.set(-1.55, 0, 0);
-        parts.armL.rotation.set(-1.5, 0, -0.2 - 0.4 * pre);
-        body.rotation.y = 0.5 * pre;
+      case 'shoot': { // ธนู: ยกคันธนูขึ้นเล็ง ง้างสายค่อยๆ ตึง → ปล่อย มือดึงสะบัดไปหลัง ตัวเด้งถอยนิดๆ
+        const aim = Math.max(wind, p <= hp ? 0 : 1 - ease(Math.max(0, rel - 0.5) / 0.5));
+        parts.armR.rotation.set(-1.55 * aim, 0, 0);
+        parts.armL.rotation.set(-1.45 * aim + 0.25 * strike, 0, -0.15 - 0.55 * pre - 0.6 * strike);
+        body.rotation.y = 0.35 * aim;
+        body.rotation.x += -0.1 * strike;
+        body.position.z += -0.06 * strike;
         break;
-      case 'cast': // คทา: ชูคทาขึ้น แล้วชี้ไปข้างหน้า
-        parts.armR.rotation.set(-2.6 * pre - 1.4 * strike, 0, 0.15);
-        parts.armL.rotation.set(-1.2 * strike, 0, -0.4);
+      }
+      case 'cast': // คทา: ชูคทาขึ้นรวมพลัง แล้วพุ่งชี้ไปข้างหน้า มือซ้ายผลักตาม
+        parts.armR.rotation.set(-2.7 * pre - 1.5 * strike, 0, 0.15 * pre);
+        parts.armL.rotation.set(-0.4 * pre - 1.3 * strike, 0, -0.4 + 0.2 * strike);
         body.position.y += 0.06 * pre;
+        lunge(0.08, 0.2);
         break;
       case 'roll': { // กลิ้ง: ม้วนตัวรอบสะโพก 1 รอบ (ตัวจริงเลื่อนไปข้างหน้าจาก lounge.js)
         const a = Math.PI * 2 * (0.5 - 0.5 * Math.cos(Math.PI * p));
@@ -580,6 +593,7 @@ export function createAvatar(look) {
     setCrown,
     held: () => heldKind,
     isBusy: () => gesture !== null,
+    gesture: () => gesture?.type ?? null, // ท่าที่เล่นอยู่ (ไว้กันท่าสะดุ้งทับท่าตี)
     sitAmount: () => sitK,
     land,
     flash,

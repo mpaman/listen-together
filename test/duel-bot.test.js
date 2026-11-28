@@ -62,6 +62,21 @@ test('ชนะ NPC = นับชนะ (ได้มงกุฎ) · ลอง
   assert.equal(arena.wins.get('A'), 1);
 });
 
+test('แพ้ = มงกุฎหายหมด (ชนะติดกันเริ่มนับใหม่) · แพ้ NPC ก็หาย', () => {
+  const arena = createArena();
+  arena.wins.set('A', 4);
+  arena.wins.set('B', 2);
+  joinQueue(arena, 'a', 'A', 0);
+  joinQueue(arena, 'b', 'B', 0);
+  forfeit(arena, 'b', 10); // B ออก = แพ้
+  assert.equal(arena.wins.get('A'), 5);
+  assert.equal(arena.wins.has('B'), false);
+  const { match } = startBotMatch(arena, 'c', 'A', 'easy', 20, LOOK);
+  forfeit(arena, 'c', 30); // A แพ้ NPC
+  assert.equal(arena.wins.has('A'), false);
+  assert.equal(match.winnerId, match.botId);
+});
+
 test('คนที่ต่อคิวหาคู่อยู่ ไปสู้ NPC → ออกจากคิวก่อน', () => {
   const arena = createArena();
   joinQueue(arena, 'a', 'A', 0);
@@ -175,4 +190,23 @@ test('บอทถืออาวุธยิงตอนอยู่ไกล �
   assert.equal(bot.weapon, 'bow');
   run(arena, now, 1500, () => { me.pose.x = bot.pose.x; me.pose.z = bot.pose.z + 1.5; me.hp = 100; });
   assert.equal(bot.weapon, 'sword');
+});
+
+test('บอทถือโล่ใหญ่ยกโล่รับท่าฟันได้ (เดิมเช็คแค่ guard ≥ 0.6 → ไม่เคยยกโล่เลย)', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(3), undefined);
+  const me = match.fighters.a;
+  const bot = match.fighters[match.botId];
+  Object.assign(bot, { loadout: ['shield', 'bow'], slot: 0, weapon: 'shield' });
+  me.weapon = 'sword';
+  let blocked = false;
+  run(arena, 0, COUNTDOWN_MS + 15000, (now) => {
+    me.pose.x = bot.pose.x;
+    me.pose.z = bot.pose.z - 1.5;
+    me.hp = 100;
+    bot.hp = Math.max(bot.hp, 50);
+    if (match.phase === 'fight') attack(match, 'a', 0, now);
+    if (bot.blocking) blocked = true;
+  });
+  assert.ok(blocked);
 });

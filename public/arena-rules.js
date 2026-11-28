@@ -31,6 +31,9 @@ export const SPAWNS = [
 // wall = โล่ใหญ่: บล็อกแล้วโดนแค่ SHIELD.chip ทุกท่า แต่เสียสตามินาต่อครั้งที่รับ (สตามินาไม่พอ = กันได้แค่ guard ปกติ)
 // ตีกับบล็อกไม่ใช้สตามินา (Man ตั้ง 2026-11-27) — สตามินามีไว้คุมการกลิ้งอย่างเดียว
 // hint = ประโยคสั้นบอกวิธีใช้ (โชว์ตอนเอาเมาส์ชี้การ์ดอาวุธ)
+// ค่าตัวเลขปรับ 2026-11-28 จากจำลองบอทชนบอท (ระดับ normal ทุกคู่อาวุธ 150 แมตช์):
+// ก่อนปรับ มีดคู่ชนะ 90% · ดาบ 81% · โล่ 8% → หลังปรับทุกอาวุธอยู่ช่วง 34–52% (หมัด ~20% เพราะเป็นของติดตัวสำรอง)
+// มีดคู่ง้างเดิม 50 ms เร็วกว่าที่ใครจะหลบทัน → เพิ่มเป็น 100 ms · ค้อนดาเมจ 32 = ต้องโดน 4 ที (34 = 3 ที แรงเกิน)
 export const WEAPONS = {
   fists: {
     name: 'หมัด', type: 'melee', dmg: 5, range: 1.4, arc: 70, windup: 80, cooldown: 380, knock: 1, move: 1.05, anim: 'jab',
@@ -38,37 +41,37 @@ export const WEAPONS = {
     pro: 'ออกหมัดไว', con: 'เบามาก ต้องเข้าประชิด',
   },
   sword: {
-    name: 'ดาบ', type: 'melee', dmg: 13, range: 2, arc: 80, windup: 140, cooldown: 520, knock: 1.6, move: 1, anim: 'slash',
+    name: 'ดาบ', type: 'melee', dmg: 12, range: 2, arc: 80, windup: 160, cooldown: 600, knock: 1.6, move: 1, anim: 'slash',
     guard: 0.7, hint: 'ฟันเป็นพัดข้างหน้า บล็อกได้ดีพอใช้',
     pro: 'สมดุล ฟันกว้าง ใช้ง่าย', con: 'ไม่มีจุดเด่นพิเศษ',
   },
   dagger: {
-    name: 'มีดคู่', type: 'melee', dmg: 7, range: 1.5, arc: 70, windup: 50, cooldown: 220, knock: 0.5, move: 1.18, anim: 'jab',
+    name: 'มีดคู่', type: 'melee', dmg: 6, range: 1.5, arc: 70, windup: 100, cooldown: 320, knock: 0.6, move: 1.12, anim: 'jab',
     guard: 0.5, hint: 'กดรัวๆ ตามติดตัว ใช้คู่กับการกลิ้ง',
     pro: 'ฟันรัวที่สุด วิ่งเร็วขึ้น', con: 'ระยะสั้น ทีละนิด',
   },
   hammer: {
-    name: 'ค้อนยักษ์', type: 'slam', dmg: 28, range: 1.5, radius: 1.7, windup: 620, cooldown: 1500, knock: 3.2, move: 0.78, anim: 'slam',
+    name: 'ค้อนยักษ์', type: 'slam', dmg: 32, range: 1.5, radius: 1.9, windup: 520, cooldown: 1250, knock: 3.2, move: 0.85, anim: 'slam',
     guard: 0.8, hint: 'ทุบเป็นวงข้างหน้า มีวงแดงเตือนอีกฝ่าย · ทะลุบล็อกครึ่งหนึ่ง', pierce: 0.5,
     pro: 'แรงสุด ทุบเป็นวง กระเด็นไกล', con: 'ง้างนาน เดินช้า กระโดดหลบได้',
   },
   spear: {
-    name: 'หอก', type: 'melee', dmg: 15, range: 3, arc: 30, windup: 220, cooldown: 780, knock: 2, move: 0.95, anim: 'stab',
+    name: 'หอก', type: 'melee', dmg: 17, range: 3, arc: 36, windup: 220, cooldown: 680, knock: 2, move: 0.95, anim: 'stab',
     guard: 0.6, hint: 'แทงตรงไกล 3 m ยืนห่างแล้วจิ้ม',
     pro: 'แทงไกลที่สุด', con: 'แนวแคบ เล็งพลาดง่าย',
   },
   bow: {
-    name: 'ธนู', type: 'shot', dmg: 11, speed: 20, radius: 0.35, life: 1.2, windup: 260, cooldown: 850, knock: 0.8, move: 0.85, anim: 'shoot',
+    name: 'ธนู', type: 'shot', dmg: 12, speed: 20, radius: 0.35, life: 1.2, windup: 260, cooldown: 850, knock: 0.8, move: 0.85, anim: 'shoot',
     guard: 0.3, hint: 'ยิงลูกเร็ว หลบหลังเสาได้ · กระโดดข้ามลูกได้',
     pro: 'ยิงไกล ลูกเร็ว', con: 'โดนเสาบัง กระโดดข้ามได้',
   },
   shield: {
-    name: 'โล่ใหญ่', type: 'melee', dmg: 6, range: 1.5, arc: 90, windup: 160, cooldown: 650, knock: 2.2, move: 0.85, anim: 'jab',
+    name: 'โล่ใหญ่', type: 'melee', dmg: 11, range: 1.5, arc: 90, windup: 140, cooldown: 520, knock: 2.2, move: 0.85, anim: 'jab',
     guard: 0.5, wall: true, hint: 'ค้างบล็อกไว้ โดนแค่ 1 ดาเมจ แต่รับแต่ละครั้งเสียสตามินา · กระแทกโล่ผลักกระเด็น',
     pro: 'บล็อกแทบไม่เข้า (1 ดาเมจ)', con: 'ตีเบา เดินช้า สตามินาหมดโล่ก็กันไม่อยู่',
   },
   staff: {
-    name: 'คทาไฟ', type: 'shot', dmg: 20, speed: 9, radius: 0.85, life: 2, windup: 380, cooldown: 1700, knock: 2.4, move: 0.9, anim: 'cast',
+    name: 'คทาไฟ', type: 'shot', dmg: 18, speed: 9, radius: 0.85, life: 2, windup: 380, cooldown: 1700, knock: 2.4, move: 0.9, anim: 'cast',
     guard: 0.4, hint: 'ลูกไฟใหญ่ช้า ยิงดักทางที่อีกฝ่ายจะเดินไป',
     pro: 'ลูกไฟใหญ่ โดนง่าย แรง', con: 'ลูกช้า ยิงช้า หลบทันถ้าระวัง',
   },

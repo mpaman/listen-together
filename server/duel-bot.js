@@ -139,7 +139,8 @@ export function stepBot(match, botId, now, dt) {
     if (slot !== bot.slot && swapWeapon(match, botId, slot, now)) events.push({ type: 'state' });
     const danger = threat(match, botId, me, now);
     if (danger && now >= brain.dodgeUntil && brain.rand() < cfg.dodge) {
-      const sturdy = WEAPONS[bot.weapon].guard >= 0.6;
+      // โล่ใหญ่ (wall) บล็อกได้แทบหมด → ต้องนับว่าการ์ดดีด้วย (เดิมเช็คแค่ guard ≥ 0.6 → บอทถือโล่ไม่เคยยกโล่เลย)
+      const sturdy = WEAPONS[bot.weapon].guard >= 0.6 || Boolean(WEAPONS[bot.weapon].wall);
       // อาวุธบล็อกดี + โดนฟันระยะประชิด → ครึ่งหนึ่งยกการ์ดรับ อีกครึ่งกลิ้งหลบ (ให้เดาทางยาก)
       // ค้อนทุบไม่บล็อก เพราะทะลุครึ่งหนึ่งและกระเด็น
       if (danger.kind === 'melee' && sturdy && brain.rand() < 0.5) {

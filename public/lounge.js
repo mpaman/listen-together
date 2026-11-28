@@ -625,10 +625,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     // หันตัวแบบนุ่ม (lerp) ทุกกรณี · ตัวเลขยิ่งมาก = หมุนทันใจขึ้น
     const turn = (to, rate) => (entry.ry = angleLerp(entry.ry, to, 1 - Math.exp(-dt * rate)));
     const faceLock = duel?.faceLock();
-    const lockAt = duel?.lockTarget();
     if (forced) turn(Math.atan2(vel.x, vel.z), 30); // กลิ้งไปทางไหน หันไปทางนั้น (ท่าม้วนตัวไปข้างหน้า)
     else if (faceLock !== null && faceLock !== undefined) turn(faceLock, 28); // กำลังฟัน: หันทางที่ฟันจนจบท่า แม้เดินอยู่
-    else if (lockAt) turn(Math.atan2(lockAt.x - entry.pos.x, lockAt.z - entry.pos.z), 18); // ล็อกเป้า = หันหาเป้าตลอด เดินข้าง/ถอยได้
     // นอกนั้น (รวมตอนเต็มจอ) หันตามทิศที่เดิน WASD — เดิมเต็มจอหันตามกล้อง แต่เดินถอยแล้วดูเหมือนเดินถอยหลังแปลกๆ
     else if (sp > 0.25) entry.ry = angleLerp(entry.ry, Math.atan2(vel.x, vel.z), 1 - Math.exp(-dt * 12));
     const now = performance.now();
@@ -697,13 +695,6 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
   function followCamera(dt) {
     const [x, y, z] = cameraGoal();
-    // ล็อกเป้า: หมุนกล้องไปอยู่หลังเรา มองผ่านไปที่เป้า (นุ่มๆ ไม่ตัดภาพ)
-    const target = duel?.lockTarget();
-    const entry = me();
-    if (target && entry) {
-      const want = Math.atan2(-(target.x - entry.pos.x), -(target.z - entry.pos.z));
-      camYaw = angleLerp(camYaw, want, 1 - Math.exp(-dt * 7));
-    }
     const k = 1 - Math.exp(-dt * 4);
     focus.x += (x - focus.x) * k;
     focus.y += (y - focus.y) * (1 - Math.exp(-dt * 3)); // กระโดดแล้วกล้องไม่เด้งตามแรงๆ
@@ -903,7 +894,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     view: container,
     fullscreenEl: container.closest('.game') ?? container,
     onLook: (dx, dy) => {
-      if (!duel.isLockedOn()) camYaw -= dx * LOOK_SPEED; // ล็อกเป้าอยู่ = กล้องหันหาเป้าเอง เมาส์ปรับแค่ก้ม/เงย
+      camYaw -= dx * LOOK_SPEED;
       camPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, camPitch + dy * LOOK_SPEED));
       placeCamera();
     },
@@ -1059,7 +1050,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   });
   canvas.addEventListener('pointermove', (e) => {
     if (orbit?.id !== e.pointerId) return;
-    if (!duel.isLockedOn()) camYaw -= (e.clientX - orbit.x) * ORBIT_SPEED;
+    camYaw -= (e.clientX - orbit.x) * ORBIT_SPEED;
     camPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, camPitch + (e.clientY - orbit.y) * ORBIT_SPEED));
     orbit.x = e.clientX;
     orbit.y = e.clientY;

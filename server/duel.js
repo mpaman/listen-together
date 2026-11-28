@@ -373,11 +373,13 @@ function stepMatch(arena, match, now, dt) {
   return events;
 }
 
-// นับชนะ (ได้มงกุฎ): ชนะคนจริง หรือชนะ NPC ก็นับ · บอทชนะไม่นับ · โหมดลองอาวุธ (หุ่น) ไม่นับ
-// (Man ขอ 11-28 ให้ชนะแล้วมีมงกุฎ · เล่นคนเดียวก็ต้องได้มงกุฎจากการชนะ NPC)
+// นับชนะติดกัน (มงกุฎ): ชนะคนจริง/NPC +1 · **แพ้ = กลับเป็น 0 มงกุฎหายหมด** (Man ขอ 11-28) · เสมอไม่เปลี่ยน
+// โหมดลองอาวุธ (หุ่น) ไม่นับ · บอทไม่มีมงกุฎ
 function recordWin(arena, match) {
-  if (!match.winner || match.practice || match.winnerId === match.botId) return;
-  arena.wins.set(match.winner, (arena.wins.get(match.winner) ?? 0) + 1);
+  if (!match.winner || match.practice) return;
+  const loserId = match.order.find((id) => id !== match.winnerId);
+  if (loserId !== match.botId) arena.wins.delete(match.fighters[loserId].name);
+  if (match.winnerId !== match.botId) arena.wins.set(match.winner, (arena.wins.get(match.winner) ?? 0) + 1);
 }
 export const allWins = (arena) => Object.fromEntries(arena.wins);
 

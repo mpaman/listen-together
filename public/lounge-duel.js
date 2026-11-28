@@ -20,6 +20,8 @@ const FACE_HOLD_MS = 260; // หลังโดนจริงแล้วยั
 const LOW_STAMINA = STAMINA.roll; // ต่ำกว่านี้ = กลิ้งไม่ได้ → แถบเปลี่ยนสีเตือน
 export const ARENA_SPEED = 4.2; // ในลานไม่มีวิ่ง → เดินเร็วกว่าลานฟังเพลงนิดนึง
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+// ท่าตีทุกแบบ (ใช้กันท่าสะดุ้งมาทับกลางท่า)
+const ATTACK_ANIMS = new Set(['jab', 'slash', 'stab', 'slam', 'shoot', 'cast']);
 
 const toWorld = (x, z) => ({ x: x + ARENA_ORIGIN.x, z: z + ARENA_ORIGIN.z });
 const toLocal = (x, z) => ({ x: x - ARENA_ORIGIN.x, z: z - ARENA_ORIGIN.z });
@@ -165,7 +167,7 @@ export function createDuel(ctx) {
   let busyUntil = 0; // กลิ้ง/แดชอยู่ ทำอย่างอื่นไม่ได้
   let motion = null; // { vx, vz, until } ความเร็วบังคับตอนกลิ้ง/แดช (lounge.js ใช้แทนปุ่มเดิน)
   let face = null; // { ry, until } ตีแล้วหันค้างทางที่ฟันจนจบท่า (lounge.js ค่อยๆ หมุนไปหา ไม่วาร์ป)
-  let lockOn = false; // กด Tab ล็อกเป้า: กล้อง/ตัว/ท่าตี หันหาคู่ต่อสู้ตลอด
+  let lockOn = false; // กด Tab ล็อกเป้า: ทุกท่าตีพุ่งไปทางคู่ต่อสู้เสมอ (กล้อง/การเดินคุมเองตามปกติ · Man ขอ 11-28 ไม่ให้ล็อกจอ)
   let lockRing = null; // วงแดงใต้เท้าเป้า (สร้างตอนล็อกครั้งแรก)
   let tipTimer = null;
   let bannerTimer = null;
@@ -255,7 +257,7 @@ export function createDuel(ctx) {
   }
 
   // ---------- ล็อกเป้า ----------
-  // ตำแหน่งเป้าที่ล็อกอยู่ (null = ไม่ได้ล็อก / ไม่มีคู่) · lounge.js ใช้หมุนกล้องและหันตัว
+  // ตำแหน่งเป้าที่ล็อกอยู่ (null = ไม่ได้ล็อก / ไม่มีคู่) · ใช้เล็งท่าตี + วาดวงแดงใต้เป้า
   function lockTarget() {
     if (!lockOn || !inArena) return null;
     return ctx.avatars.get(opponentId())?.pos ?? null;
@@ -399,7 +401,8 @@ export function createDuel(ctx) {
       fx.puff(entry.pos.x + Math.sin(entry.ry) * 0.5, entry.viewY + 1.1, entry.pos.z + Math.cos(entry.ry) * 0.5, { n: 8, spread: 2.2, up: 1.2, hex: 0xc0cbdc });
     } else {
       entry.av.flash();
-      entry.av.play('flinch');
+      // กำลังตีอยู่ = แค่กะพริบ ไม่สะดุ้ง (เดิมท่าสะดุ้งทับท่าตีกลางคัน แขนวาร์ปกลับ ดูแปลก)
+      if (!ATTACK_ANIMS.has(entry.av.gesture())) entry.av.play('flinch');
       floatText(entry, `-${ev.dmg}`);
       fx.puff(entry.pos.x, entry.viewY + 1, entry.pos.z, { n: 6, spread: 2, up: 1.5, hex: 0xe43b44 });
     }
@@ -452,6 +455,50 @@ export function createDuel(ctx) {
     if (entry.target) entry.target.ry = ry;
     entry.av.play(weapon.anim, { sec: windup / 1000 + 0.35, hitAt: windup / 1000 });
     if (weapon.type === 'slam') telegraph(entry, ry, weapon, windup);
+    else if (weapon.type === 'melee') setTimeout(() => inArena && swingTrail(entry, weapon, kind, ry), windup);
+  }
+
+  // ---------- รอยฟัน: แสงจางๆ ตามแนวที่อาวุธกวาดผ่าน ให้เห็นชัดว่ากำลังตี + ระยะเท่าไหร่ ----------
+  // แค่ภาพ ไม่ได้ใช้ตัดสินโดน (server ตัดสิน) · ขนาดตาม range/arc ของอาวุธจริง
+  const TRAIL_LIFE = 0.22;
+  const TRAIL_HEX = { sword: 0xeaf4ff, dagger: 0xc0cbdc, fists: 0xfee761, spear: 0x8fd3ff, shield: 0x63c7ff };
+  const trails = [];
+  function swingTrail(entry, weapon, kind, ry) {
+    const hex = TRAIL_HEX[kind] ?? 0xffffff;
+    const mat = new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false });
+    const group = new THREE.Group();
+    let mesh;
+    if (weapon.anim === 'stab') {
+      // หอก: ลำแสงยาวตรงไปข้างหน้า
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, weapon.range - 0.4), mat);
+      mesh.position.set(0, 0, 0.4 + (weapon.range - 0.4) / 2);
+    } else {
+      // ดาบ/มีด/หมัด/โล่: เสี้ยววงตามมุมที่ฟันได้ (หมุนให้กลางเสี้ยวอยู่หน้าตัว)
+      const arc = THREE.MathUtils.degToRad(weapon.arc ?? 60);
+      const r = weapon.range;
+      mesh = new THREE.Mesh(new THREE.RingGeometry(r * 0.55, r, 18, 1, -Math.PI / 2 - arc / 2, arc), mat);
+      mesh.rotation.x = -Math.PI / 2;
+    }
+    group.add(mesh);
+    group.position.set(entry.pos.x, entry.viewY + 0.95, entry.pos.z);
+    group.rotation.y = ry;
+    if (weapon.anim === 'slash') group.rotation.z = 0.35; // ฟันเฉียง
+    scene.add(group);
+    trails.push({ group, mat, age: 0 });
+  }
+  function tickTrails(dt) {
+    for (let i = trails.length - 1; i >= 0; i -= 1) {
+      const tr = trails[i];
+      tr.age += dt;
+      const k = tr.age / TRAIL_LIFE;
+      tr.mat.opacity = 0.75 * (1 - k);
+      tr.group.scale.setScalar(1 + 0.15 * k);
+      if (k < 1) continue;
+      scene.remove(tr.group);
+      tr.group.traverse((o) => o.geometry?.dispose());
+      tr.mat.dispose();
+      trails.splice(i, 1);
+    }
   }
 
   // ค้อน: วงแดงบนพื้นตรงที่จะทุบ ให้อีกฝ่ายเห็นแล้วหลบ/กระโดดทัน
@@ -772,6 +819,7 @@ export function createDuel(ctx) {
     renderClock(now);
     if (!inArena) return;
     const t = now / 1000;
+    tickTrails(dt);
     for (const flame of arena.flames) animateItem(flame, t);
     for (const [id, s] of shots) {
       s.mesh.position.x += s.vx * dt;
@@ -811,7 +859,6 @@ export function createDuel(ctx) {
     key,
     motion: () => (inArena ? currentMotion(performance.now()) : null),
     lockTarget,
-    isLockedOn: () => Boolean(lockTarget()),
     // ทิศที่ต้องหันค้างไว้ระหว่างท่าตี (null = ไม่ล็อก)
     faceLock: () => (inArena && face && performance.now() < face.until ? face.ry : null),
     // ใช้ตอน ?debug=1 / ทดสอบ: ดูสถานะการต่อสู้ของเรา
