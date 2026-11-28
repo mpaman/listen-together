@@ -103,6 +103,24 @@ function guideHtml() {
 
 // ---------- เลือกอาวุธหลัก/รอง (ในเมนูประลอง) ----------
 const LOADOUT_KEY = 'duel-loadout';
+const NPC_WEAPON_KEY = 'duel-npc-weapon';
+
+// เลือกอาวุธให้ NPC (ไว้ทดสอบ) · "สุ่ม" = ชุดตามระดับเหมือนเดิม · จำไว้ในเครื่อง
+function createNpcWeaponPicker() {
+  const select = document.getElementById('duel-npc-weapon');
+  if (!select) return { get: () => null };
+  select.replaceChildren(new Option('สุ่มตามปกติ', ''), ...WEAPON_KINDS.map((kind) => new Option(WEAPONS[kind].name, kind)));
+  const saved = localStorage.getItem(NPC_WEAPON_KEY);
+  select.value = WEAPON_KINDS.includes(saved) ? saved : '';
+  select.addEventListener('change', () => {
+    try {
+      localStorage.setItem(NPC_WEAPON_KEY, select.value);
+    } catch {
+      // โหมดส่วนตัว/ที่เก็บเต็ม: ไม่จำก็ได้ ใช้ค่าที่เลือกตอนนี้ไปก่อน
+    }
+  });
+  return { get: () => select.value || null };
+}
 const TYPE_NAMES = { melee: 'ประชิด', slam: 'ทุบเป็นวง', shot: 'ยิงไกล' };
 const FASTEST_COOLDOWN = Math.min(...WEAPON_KINDS.map((k) => WEAPONS[k].cooldown));
 const MAX_DMG = Math.max(...WEAPON_KINDS.map((k) => WEAPONS[k].dmg));
@@ -207,6 +225,7 @@ export function createPanels({ getLook, setLook, randomLook }) {
   };
   let openName = null;
   const loadoutPicker = createLoadoutPicker();
+  const npcWeaponPicker = createNpcWeaponPicker();
 
   function close(returnFocus = true) {
     if (!openName) return;
@@ -348,5 +367,6 @@ export function createPanels({ getLook, setLook, randomLook }) {
     isOpen: (name) => openName === name,
     refreshWardrobe: () => openName === 'wardrobe' && renderWardrobe(),
     loadout: () => loadoutPicker.get(),
+    npcWeapon: () => npcWeaponPicker.get(),
   };
 }

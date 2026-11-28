@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blockedLine, BOT_LEVELS, isBotId, preferredRange, startBotMatch, tickBot } from '../server/duel-bot.js';
+import { blockedLine, BOT_LEVELS, botKitFor, isBotId, preferredRange, startBotMatch, tickBot } from '../server/duel-bot.js';
 import { attack, createArena, forfeit, joinQueue, stepDuel } from '../server/duel.js';
 import { COUNTDOWN_MS, inPillar } from '../public/arena-rules.js';
 
@@ -209,4 +209,23 @@ test('บอทถือโล่ใหญ่ยกโล่รับท่า�
     if (bot.blocking) blocked = true;
   });
   assert.ok(blocked);
+});
+
+test('เลือกอาวุธให้ NPC ได้ (ไว้ทดสอบ) · ช่องรองประเภทเดียวกัน บอทจะได้ไม่สลับ · ชื่อผิด = สุ่มตามเดิม', () => {
+  assert.deepEqual(botKitFor('hammer'), ['hammer', 'sword']);
+  assert.deepEqual(botKitFor('sword'), ['sword', 'dagger']);
+  assert.deepEqual(botKitFor('bow'), ['bow', 'staff']);
+  assert.deepEqual(botKitFor('staff'), ['staff', 'bow']);
+  assert.equal(botKitFor('fists'), null);
+  assert.equal(botKitFor('<script>'), null);
+  assert.equal(botKitFor(undefined), null);
+
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(1), undefined, 'spear');
+  assert.deepEqual(match.fighters[match.botId].loadout, ['spear', 'sword']);
+  assert.equal(match.fighters[match.botId].weapon, 'spear');
+
+  const other = createArena();
+  const { match: random } = startBotMatch(other, 'b', 'B', 'normal', 0, LOOK, seeded(1), undefined, 'nope');
+  assert.ok(BOT_LEVELS.normal.kits.some((kit) => kit.join() === random.fighters[random.botId].loadout.join()));
 });

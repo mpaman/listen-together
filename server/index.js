@@ -579,7 +579,7 @@ io.on('connection', (socket) => {
     const room = roomId && rooms.get(roomId);
     if (!room || !allowGesture(Date.now())) return reply({ error: 'กดถี่ไป รอแป๊บนึง' });
     const now = Date.now();
-    const res = startBotMatch(room.arena, socket.id, userName, raw?.level, now, randomLook(), Math.random, raw?.loadout);
+    const res = startBotMatch(room.arena, socket.id, userName, raw?.level, now, randomLook(), Math.random, raw?.loadout, raw?.botWeapon);
     if (res.error) return reply(res);
     emitDuelEvents(roomId, room, [{ type: 'start', match: res.match }], now);
     return reply({ ok: true });

@@ -211,7 +211,9 @@ function joinDuelQueue() {
 function onDuelMenu(kind) {
   panels.close();
   if (kind === 'queue') return joinDuelQueue();
-  socket.emit('duel:npc', { level: kind === 'dummy' ? 'dummy' : 'normal', loadout: panels.loadout() }, (res) => res?.error && ui.toast(res.error));
+  // สู้ NPC: ส่งอาวุธที่เลือกให้ NPC ไปด้วย (ว่าง = สุ่ม) · ลองอาวุธ (หุ่น) ไม่ตีอยู่แล้ว ไม่ต้องส่ง
+  const botWeapon = kind === 'npc' ? panels.npcWeapon() : null;
+  socket.emit('duel:npc', { level: kind === 'dummy' ? 'dummy' : 'normal', loadout: panels.loadout(), botWeapon }, (res) => res?.error && ui.toast(res.error));
 }
 socket.on('duel:queue', (names) => {
   const before = duelWaiting.length;

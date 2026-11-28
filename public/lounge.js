@@ -3,6 +3,7 @@
 // ต่อย: เครื่องของ "คนที่โดน" เป็นคนเช็คว่าโดนไหม แล้วกระเด็นเอง (ไม่ต้องให้ server คำนวณ)
 // ของในลาน: server เป็นคนวาง/ตัดสินว่าใครเก็บได้ เครื่องเราแค่บอกว่า "เดินทับชิ้นนี้แล้ว"
 import * as THREE from 'three';
+import { gpuNameOf, isSoftwareGpu } from './gpu-check.js';
 import { createAvatar, HEAD_TOP, SEAT_HIP } from './lounge-avatar.js';
 import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
 import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
@@ -176,8 +177,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-  renderer.shadowMap.enabled = true;
+  // เบราว์เซอร์ใช้ CPU วาดแทนการ์ดจอ (ปิดการเร่งด้วยการ์ดจอไว้) → ปิดเงา (วาดฉากซ้ำอีกรอบ กินเครื่องสุด) + ลดความละเอียด + บอกวิธีแก้
+  const softwareGpu = isSoftwareGpu(gpuNameOf(renderer.getContext()));
+  renderer.shadowMap.enabled = !softwareGpu;
   renderer.shadowMap.type = THREE.BasicShadowMap; // เงาขอบแข็ง เข้ากับภาพพิกเซล
+  if (softwareGpu) {
+    setTimeout(() => onNotice('⚠️ เบราว์เซอร์วาดภาพด้วย CPU (ปิดการเร่งด้วยการ์ดจออยู่) เกมจะกระตุก · Chrome: Settings › System › เปิด "Use graphics acceleration when available" แล้วเปิด Chrome ใหม่'), 1500);
+  }
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(SKY);
   scene.fog = new THREE.Fog(SKY, 26, 46);
@@ -728,7 +734,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
 
   let quality = Math.max(0, QUALITY.findIndex((q) => q.label === localStorage.getItem(QUALITY_KEY)));
-  if (localStorage.getItem(QUALITY_KEY) === null) quality = 1; // ค่าเริ่มต้น = คม (Man ขอเพิ่มความละเอียด 11-27)
+  if (localStorage.getItem(QUALITY_KEY) === null) quality = softwareGpu ? 0 : 1; // ค่าเริ่มต้น = คม (Man ขอเพิ่มความละเอียด 11-27) · ใช้ CPU วาด = 8-bit
   function fitCamera() {
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
@@ -757,7 +763,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function tickFps(now) {
     fpsFrames += 1;
     if (now - fpsSince < 500) return;
-    if (!fpsTag.hidden) fpsTag.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsSince))} FPS · ${QUALITY[quality].label}`;
+    if (!fpsTag.hidden) fpsTag.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsSince))} FPS · ${QUALITY[quality].label}${softwareGpu ? ' · CPU วาด (ไม่ใช้การ์ดจอ)' : ''} · ${renderer.info.render.calls} draw`; // draw = จำนวนชิ้นที่สั่งวาดต่อเฟรม (ยิ่งเยอะยิ่งหนัก)
     fpsFrames = 0;
     fpsSince = now;
   }

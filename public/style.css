@@ -1499,6 +1499,9 @@ kbd {
 .loadout-detail .is-con { color: var(--coral); }
 /* โหมด 3 ปุ่มเรียงแถวเดียว ให้เห็นพร้อมการ์ดอาวุธไม่ต้องเลื่อน · คำอธิบายยาวย้ายไปอยู่ใน title */
 .duel-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.duel-npc-pick { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 0.8rem; color: var(--muted); }
+.duel-npc-pick select { min-height: 32px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface-2); color: inherit; font: inherit; }
+.duel-npc-pick select:focus-visible { outline: 2px solid #feae34; outline-offset: 2px; }
 .duel-modes .duel-option { grid-template-columns: 1fr; justify-items: center; gap: 4px; padding: 9px 6px; text-align: center; }
 .duel-modes .duel-option strong { font-size: 0.8rem; line-height: 1.25; }
 .duel-modes .duel-option small { display: none; }
