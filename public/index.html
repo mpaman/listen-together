@@ -26,11 +26,16 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 6v12M6 12h12"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m6 12.5 4 4 8-9"/></symbol>
     <symbol id="i-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8"/></g><circle cx="12" cy="17.2" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8"/></g></symbol>
     <symbol id="i-shirt" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M9 4h6l5 3-2 4-2-1v10H8V10l-2 1-2-4z"/></symbol>
     <symbol id="i-sword" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 4.5 20 4l-.5 4.5L10 18l-4-4 9.5-9.5z"/><path d="m4 15 5 5M6.5 17.5 4 20"/></g></symbol>
     <symbol id="i-users" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.4 3-5 6-5s5.4 1.6 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.4c1.6.7 2.6 2.2 3 4.6"/></g></symbol>
     <symbol id="i-robot" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M3 13v3M21 13v3"/></g><g fill="currentColor"><circle cx="9.5" cy="13" r="1.4"/><circle cx="14.5" cy="13" r="1.4"/></g></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></g><circle cx="12" cy="12" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 3 5 6v5c0 4.5 3 8.2 7 10 4-1.8 7-5.5 7-10V6z"/><path fill="currentColor" d="M12 7v10c-2.5-1.3-4-3.6-4-6V8.6z" opacity=".55"/></symbol>
+    <symbol id="i-roll" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.05-4.95"/><path d="M17.5 3.5v4h-4"/></g></symbol>
+    <symbol id="i-run" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h6M2 12h5M3 16h6"/><path d="m11 18 4-6-4-6M16 18l4-6-4-6"/></g></symbol>
     <symbol id="i-mouse" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v3"/></g></symbol>
     <symbol id="i-chevron-left" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m14.5 6-6 6 6 6"/></symbol>
     <symbol id="i-chevron-right" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m9.5 6 6 6-6 6"/></symbol>
@@ -231,11 +236,30 @@
             <div class="wardrobe-rows" id="wardrobe-rows"></div>
             <button type="button" class="panel-cta" id="wardrobe-random"><svg class="icon" aria-hidden="true"><use href="#i-dice"/></svg>สุ่มทั้งชุด</button>
           </section>
+          <section class="lounge-panel" id="keys-panel" role="dialog" aria-labelledby="keys-title" hidden>
+            <header class="panel-head"><h3 id="keys-title">ตั้งค่าปุ่ม</h3><button type="button" class="icon-btn panel-close" aria-label="ปิดตั้งค่าปุ่ม"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button></header>
+            <p class="keys-help">กดปุ่มทางขวาของท่าที่จะเปลี่ยน แล้วกดปุ่มบนคีย์บอร์ดที่ถนัด · เลือกปุ่มที่มีท่าอื่นใช้อยู่ = สลับกันให้ · จำไว้ในเครื่องนี้</p>
+            <div class="keys-rows" id="keys-rows"></div>
+            <label class="keys-toggle"><input type="checkbox" id="keys-mouse"><span>สลับเมาส์: คลิกขวา = ตี · คลิกซ้าย = บล็อก</span></label>
+            <p class="keys-note" id="keys-note" role="status" aria-live="polite"></p>
+            <button type="button" class="panel-cta is-quiet" id="keys-reset">กลับเป็นปุ่มเริ่มต้น</button>
+          </section>
           <section class="lounge-panel duel-menu" id="duel-panel" role="dialog" aria-labelledby="duel-title" hidden>
             <header class="panel-head"><h3 id="duel-title">ลานประลอง</h3><button type="button" class="icon-btn panel-close" aria-label="ปิดเมนูประลอง"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button></header>
+            <div class="loadout">
+              <div class="loadout-slots" role="group" aria-label="อาวุธที่จะพกเข้าลาน">
+                <button type="button" class="loadout-slot" data-slot="0" aria-pressed="true"><small>อาวุธหลัก · กด 1</small><strong></strong></button>
+                <button type="button" class="loadout-slot" data-slot="1" aria-pressed="false"><small>อาวุธรอง · กด 2</small><strong></strong></button>
+              </div>
+              <p class="loadout-help">กดช่องด้านบน แล้วเลือกการ์ดอาวุธ · ชี้เมาส์ที่การ์ดเพื่อดูว่าทำอะไรได้</p>
+              <div class="loadout-grid" id="loadout-grid"></div>
+              <div class="loadout-detail" id="loadout-detail" aria-live="polite"></div>
+            </div>
+            <div class="duel-modes">
             <button type="button" class="duel-option" data-duel="queue"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span><strong id="duel-queue-label">หาคู่ (คนจริง)</strong><small id="duel-queue-sub">รอเพื่อนในห้องกดประลองด้วย แล้วเข้าลาน 1v1</small></span></button>
-            <button type="button" class="duel-option" data-duel="npc"><svg class="icon" aria-hidden="true"><use href="#i-robot"/></svg><span><strong>สู้กับ NPC</strong><small>NPC เข้าลานมาสู้ด้วยทันที ไม่ต้องรอใคร · 90 วินาที</small></span></button>
-            <button type="button" class="duel-option" data-duel="dummy"><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg><span><strong>ลองอาวุธ</strong><small>ตีหุ่นซ้อมที่ไม่ตีกลับ · ไม่จับเวลา · ลองครบทั้ง 6 ชิ้น</small></span></button>
+            <button type="button" class="duel-option" data-duel="npc"><svg class="icon" aria-hidden="true"><use href="#i-robot"/></svg><span><strong>สู้กับ NPC</strong><small>NPC เข้าลานมาสู้ด้วยทันที ไม่ต้องรอใคร · 90 วิ</small></span></button>
+            <button type="button" class="duel-option" data-duel="dummy"><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg><span><strong>ลองอาวุธ</strong><small>ตีหุ่นซ้อมที่ไม่ตีกลับ · ไม่จับเวลา · ลอง 2 ชิ้นที่เลือกไว้</small></span></button>
+            </div>
           </section>
         </div>
         <div class="lounge-bar">
@@ -263,6 +287,8 @@
               <svg class="icon" aria-hidden="true"><use href="#i-dice"/></svg>
             </button>
             <button type="button" class="icon-btn" id="wardrobe-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="แต่งตัว" title="แต่งตัว (เลือกเองทีละส่วน)"><svg class="icon" aria-hidden="true"><use href="#i-shirt"/></svg></button>
+            <button type="button" class="icon-btn" id="keys-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="ตั้งค่าปุ่ม" title="ตั้งค่าปุ่ม: เปลี่ยนปุ่มเอง / สลับเมาส์"><svg class="icon" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
+            <button type="button" class="icon-btn" id="fullscreen-btn" aria-pressed="false" aria-label="เต็มจอ" title="เต็มจอ (Enter ในลานประลอง) · Esc ออก"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></button>
             <button type="button" class="icon-btn" id="guide-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="วิธีเล่น" title="วิธีเล่น: แต่ละปุ่มทำอะไร (?)"><svg class="icon" aria-hidden="true"><use href="#i-help"/></svg></button>
           </div>
           <form class="say-form" id="say-form" autocomplete="off">

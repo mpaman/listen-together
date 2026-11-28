@@ -2,8 +2,8 @@
 // server เป็นคนตัดสินดาเมจทั้งหมด (คนตีแค่บอกว่า "ฟันแล้ว" คนโดนแค่ส่งตำแหน่ง) → โกงยิงโดนเองไม่ได้
 // ฟังก์ชันในไฟล์นี้ไม่แตะ socket/เวลาเครื่อง: รับ now เข้ามา คืนรายการเหตุการณ์ ให้ index.js เป็นคนกระจาย
 import {
-  ARENA_HALF, BODY_HEIGHT, BODY_RADIUS, clampArena, COUNTDOWN_MS, FIGHT_MS, HP_MAX, inPillar,
-  PICK_RANGE, RESULT_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, WEAPON_SPOTS, WEAPONS,
+  ARENA_HALF, BLOCK_ARC, BODY_HEIGHT, BODY_RADIUS, clampArena, cleanLoadout, COUNTDOWN_MS, DASH_ENABLED, DASH_MS, FIGHT_MS, SHIELD,
+  HP_MAX, inPillar, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, STAMINA, SWAP_MS, WEAPONS,
 } from '../public/arena-rules.js';
 
 const MAX_Y = 6; // กระโดดในลาน (พื้นเรียบ) สูงสุด ~1.3 m เผื่อไว้
@@ -16,9 +16,9 @@ export function createArena() {
 
 // ---------- คิว ----------
 // กดเข้าคิว: ถ้ามีคนรออยู่แล้วและลานว่าง → เริ่มแมตช์ทันที · คืน { queued } หรือ { match }
-export function joinQueue(arena, id, name, now) {
+export function joinQueue(arena, id, name, now, loadout) {
   if (isFighter(arena, id)) return { error: 'กำลังประลองอยู่' };
-  if (!arena.queue.some((q) => q.id === id)) arena.queue.push({ id, name });
+  if (!arena.queue.some((q) => q.id === id)) arena.queue.push({ id, name, loadout: cleanLoadout(loadout) });
   const match = startIfReady(arena, now);
   return match ? { match } : { queued: true };
 }
@@ -41,9 +41,14 @@ export function startIfReady(arena, now) {
 export function createMatch(arena, pair, now, extra = {}) {
   arena.seq += 1;
   const fighters = {};
-  pair.forEach(({ id, name, look }, side) => {
+  pair.forEach(({ id, name, look, loadout }, side) => {
     const spawn = SPAWNS[side];
-    fighters[id] = { id, name, side, hp: HP_MAX, weapon: 'fists', readyAt: 0, pose: { x: spawn.x, y: 0, z: spawn.z, ry: spawn.ry }, ...(look ? { look } : {}) };
+    const kit = cleanLoadout(loadout);
+    fighters[id] = {
+      id, name, side, hp: HP_MAX, loadout: kit, slot: 0, weapon: kit[0], readyAt: 0,
+      stamina: STAMINA.max, spentAt: 0, blocking: false, rollUntil: 0, stunUntil: 0,
+      pose: { x: spawn.x, y: 0, z: spawn.z, ry: spawn.ry }, ...(look ? { look } : {}),
+    };
   });
   arena.match = {
     id: arena.seq,
@@ -51,8 +56,7 @@ export function createMatch(arena, pair, now, extra = {}) {
     phaseAt: now,
     order: pair.map((p) => p.id),
     fighters,
-    weapons: WEAPON_SPOTS.map((spot, i) => ({ id: i + 1, kind: spot.kind, x: spot.x, z: spot.z })),
-    weaponSeq: WEAPON_SPOTS.length,
+    weapons: [], // (เดิมมีอาวุธวางบนพื้น · ตอนนี้เลือกหลัก/รองก่อนเข้าลานแทน)
     pending: [], // ท่าที่กำลังง้าง รอถึงเวลาโดน
     shots: [], // ลูกธนู/ลูกไฟที่ลอยอยู่
     shotSeq: 0,
@@ -73,7 +77,10 @@ export function publicMatch(match, now) {
     msLeft: Math.max(0, match.phaseAt + length - now),
     fighters: match.order.map((id) => {
       const f = match.fighters[id];
-      return { id, name: f.name, side: f.side, hp: f.hp, weapon: f.weapon, pose: f.pose, ...(f.look ? { look: f.look, npc: true } : {}) };
+      return {
+        id, name: f.name, side: f.side, hp: f.hp, weapon: f.weapon, loadout: f.loadout, slot: f.slot,
+        stamina: Math.round(f.stamina), blocking: f.blocking, pose: f.pose, ...(f.look ? { look: f.look, npc: true } : {}),
+      };
     }),
     weapons: match.weapons,
     winner: match.winner,
@@ -100,25 +107,54 @@ export function setPose(match, id, raw) {
   return f.pose;
 }
 
-// ---------- เก็บอาวุธ ----------
-// สลับ: ของที่ถืออยู่ (ถ้าไม่ใช่หมัด) วางลงตรงที่ยืน · คืน { weapon, dropped } หรือ null
-export function pickWeapon(match, id, spotId) {
+// ---------- สลับอาวุธ ----------
+// slot 0 = หลัก, 1 = รอง · ไม่ส่ง slot = สลับไปอีกอัน · หลังสลับต้องรอ SWAP_MS ก่อนตี
+export function swapWeapon(match, id, rawSlot, now) {
   const f = match?.fighters[id];
-  if (!f || match.phase === 'over') return null;
-  const index = match.weapons.findIndex((w) => w.id === spotId);
-  if (index < 0) return null;
-  const item = match.weapons[index];
-  if (Math.hypot(item.x - f.pose.x, item.z - f.pose.z) > PICK_RANGE + 0.8) return null; // เผื่อตำแหน่งที่ server รู้ช้ากว่าจริง
-  match.weapons.splice(index, 1);
-  let dropped = null;
-  if (f.weapon !== 'fists') {
-    match.weaponSeq += 1;
-    dropped = { id: match.weaponSeq, kind: f.weapon, x: f.pose.x, z: f.pose.z };
-    match.weapons.push(dropped);
+  if (!f || match.phase === 'over' || busy(f, now)) return null;
+  const slot = rawSlot === 0 || rawSlot === 1 ? rawSlot : 1 - f.slot;
+  if (slot === f.slot) return null;
+  f.slot = slot;
+  f.weapon = f.loadout[slot];
+  f.blocking = false;
+  f.readyAt = Math.max(f.readyAt, now + SWAP_MS);
+  return { weapon: f.weapon, slot };
+}
+
+// ---------- สตามินา / บล็อก / กลิ้ง / แดช ----------
+function spend(f, cost, now) {
+  f.stamina = Math.max(0, f.stamina - cost);
+  f.spentAt = now;
+}
+// มึน หรือยังกลิ้งไม่จบท่า = ทำอย่างอื่นไม่ได้
+const busy = (f, now) => now < f.stunUntil || now < f.rollUntil + (ROLL_MS - ROLL_IFRAME_MS);
+
+// คนเล่นกดท่า: block (on = ยก/ลดการ์ด) · roll · dash
+// คืน { act, on? } ให้ส่งต่อทุกเครื่องเล่นท่า หรือ null ถ้าทำไม่ได้ (สตามินาไม่พอ/กลิ้งอยู่)
+// บล็อกไม่ใช้สตามินา · แดชปิดไว้ (DASH_ENABLED)
+export function act(match, id, type, now, on = true) {
+  const f = match?.fighters[id];
+  if (!f || match.phase !== 'fight') return null;
+  if (type === 'block') {
+    const next = Boolean(on) && !busy(f, now);
+    if (next === f.blocking) return null;
+    f.blocking = next;
+    return { act: 'block', on: next };
   }
-  f.weapon = item.kind;
-  f.readyAt = 0;
-  return { weapon: item.kind, dropped };
+  const cost = { roll: STAMINA.roll, ...(DASH_ENABLED ? { dash: STAMINA.dash } : {}) }[type];
+  if (cost === undefined || busy(f, now) || f.stamina < cost) return null;
+  spend(f, cost, now);
+  f.blocking = false;
+  if (type === 'roll') f.rollUntil = now + ROLL_IFRAME_MS;
+  return { act: type, ms: type === 'roll' ? ROLL_MS : DASH_MS };
+}
+
+// สตามินาฟื้นเองเมื่อไม่ได้กลิ้งสักพัก
+function regen(match, now, dt) {
+  for (const f of Object.values(match.fighters)) {
+    if (now - f.spentAt < STAMINA.regenDelay || f.stamina >= STAMINA.max) continue;
+    f.stamina = Math.min(STAMINA.max, f.stamina + STAMINA.regen * dt);
+  }
 }
 
 // ---------- โจมตี ----------
@@ -126,10 +162,11 @@ export function pickWeapon(match, id, spotId) {
 // คืน { weapon, ry, windup } ให้ทุกเครื่องเล่นท่า หรือ null ถ้ายังกดไม่ได้
 export function attack(match, id, rawRy, now) {
   const f = match?.fighters[id];
-  if (!f || match.phase !== 'fight' || now < f.readyAt) return null;
+  if (!f || match.phase !== 'fight' || now < f.readyAt || busy(f, now)) return null;
   const ry = Number.isFinite(rawRy) ? wrapAngle(rawRy) : f.pose.ry;
   const weapon = WEAPONS[f.weapon];
   f.readyAt = now + weapon.cooldown;
+  f.blocking = false; // ตีแล้วลดการ์ดลงเอง
   f.pose.ry = round(ry);
   match.pending.push({ by: id, kind: f.weapon, ry, at: now + weapon.windup });
   return { weapon: f.weapon, ry: round(ry), windup: weapon.windup };
@@ -173,10 +210,40 @@ function knockbackOf(from, to, knock) {
   return { kx: round(dx / d), kz: round(dz / d), knock };
 }
 
-function applyHit(match, by, target, kind, from, events) {
+// ยกการ์ดหันเข้าหาทางที่ดาเมจมาไหม (from = จุดที่ดาเมจมา)
+function guarding(target, from) {
+  if (!target.blocking) return false;
+  const dx = from.x - target.pose.x;
+  const dz = from.z - target.pose.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 0.01) return true;
+  const { fx, fz } = facingOf(target.pose.ry);
+  return (fx * dx + fz * dz) / d >= Math.cos(((BLOCK_ARC / 2) * Math.PI) / 180);
+}
+
+function applyHit(match, by, target, kind, from, events, now) {
   const weapon = WEAPONS[kind];
-  target.hp = Math.max(0, target.hp - weapon.dmg);
-  events.push({ type: 'hit', by, target: target.id, weapon: kind, dmg: weapon.dmg, hp: target.hp, ...knockbackOf(from, target.pose, weapon.knock) });
+  // ช่วงต้นของการกลิ้ง = อมตะ
+  if (now < target.rollUntil) {
+    events.push({ type: 'dodge', by, target: target.id });
+    return;
+  }
+  let dmg = weapon.dmg;
+  let knock = weapon.knock;
+  let blocked = false;
+  if (guarding(target, from)) {
+    const shield = WEAPONS[target.weapon];
+    const wallCost = Math.round(SHIELD.cost * (1 + 2 * (weapon.pierce ?? 0)));
+    if (shield.wall && target.stamina >= wallCost) {
+      // โล่ใหญ่ + สตามินาพอ = รับได้เกือบหมด เหลือแค่ chip
+      spend(target, wallCost, now);
+      dmg = Math.min(dmg, SHIELD.chip);
+    } else dmg -= Math.round(dmg * shield.guard * (1 - (weapon.pierce ?? 0)));
+    knock *= 0.35;
+    blocked = true;
+  }
+  target.hp = Math.max(0, target.hp - dmg);
+  events.push({ type: 'hit', by, target: target.id, weapon: kind, dmg, blocked, hp: target.hp, stamina: Math.round(target.stamina), ...knockbackOf(from, target.pose, knock) });
   if (target.hp > 0) return;
   // โหมดลองอาวุธ: หุ่นเลือดหมดแล้วฟื้นเต็ม ไม่จบแมตช์
   if (match.practice) {
@@ -214,7 +281,7 @@ function resolvePending(match, now, events) {
       continue;
     }
     const hits = weapon.type === 'slam' ? slamHits : meleeHits;
-    if (hits(attacker.pose, target.pose, p.ry, weapon)) applyHit(match, p.by, target, p.kind, attacker.pose, events);
+    if (hits(attacker.pose, target.pose, p.ry, weapon)) applyHit(match, p.by, target, p.kind, attacker.pose, events, now);
   }
 }
 
@@ -231,7 +298,7 @@ function moveShots(match, dt, now, events) {
       shot.x += (shot.vx * dt) / steps;
       shot.z += (shot.vz * dt) / steps;
       if (match.phase === 'fight' && shotHits(shot, target.pose, weapon.radius)) {
-        applyHit(match, shot.by, target, shot.kind, { x: shot.x - shot.vx, z: shot.z - shot.vz }, events);
+        applyHit(match, shot.by, target, shot.kind, { x: shot.x - shot.vx, z: shot.z - shot.vz }, events, now);
         gone = 'hit';
       } else if (inPillar(shot.x, shot.z, weapon.radius * 0.4)) gone = 'pillar';
       else if (Math.abs(shot.x) > ARENA_HALF + 1 || Math.abs(shot.z) > ARENA_HALF + 1 || now - shot.born > weapon.life * 1000) gone = 'away';
@@ -253,6 +320,7 @@ export function stepDuel(arena, now, dt = 0.05) {
     events.push({ type: 'phase', phase: 'fight' });
   }
   if (match.phase === 'fight') {
+    regen(match, now, dt);
     resolvePending(match, now, events);
     moveShots(match, dt, now, events);
     if (match.phase === 'fight' && !match.practice && now - match.phaseAt >= FIGHT_MS) {

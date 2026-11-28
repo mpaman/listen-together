@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  attack, createArena, forfeit, joinQueue, leaveQueue, meleeHits, pickWeapon, publicMatch,
-  queueNames, setPose, shotHits, slamHits, stepDuel, winsOf,
+  act, attack, createArena, forfeit, joinQueue, leaveQueue, meleeHits, publicMatch,
+  queueNames, setPose, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
 } from '../server/duel.js';
-import { COUNTDOWN_MS, FIGHT_MS, HP_MAX, RESULT_MS, WEAPON_SPOTS, WEAPONS } from '../public/arena-rules.js';
+import {
+  cleanLoadout, COUNTDOWN_MS, DEFAULT_LOADOUT, FIGHT_MS, HP_MAX, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHIELD, STAMINA, SWAP_MS, WEAPONS,
+} from '../public/arena-rules.js';
 
 // เริ่มแมตช์ A vs B แล้วข้ามนับถอยหลังให้เข้าช่วงสู้เลย
 function fighting(t0 = 0) {
@@ -12,7 +14,14 @@ function fighting(t0 = 0) {
   joinQueue(arena, 'a', 'A', t0);
   joinQueue(arena, 'b', 'B', t0);
   stepDuel(arena, t0 + COUNTDOWN_MS);
+  // test เดิมเขียนไว้ตอนทุกคนเริ่มด้วยหมัด → ให้ถือหมัดก่อน แล้วแต่ละ test เปลี่ยนอาวุธเอง
+  hold(arena.match, 'a', 'fists');
+  hold(arena.match, 'b', 'fists');
   return { arena, match: arena.match, t: t0 + COUNTDOWN_MS };
+}
+// ใส่อาวุธให้ตรงๆ (เฉพาะใน test)
+function hold(match, id, kind) {
+  match.fighters[id].weapon = kind;
 }
 const place = (match, id, x, z, ry = 0, y = 0) => setPose(match, id, { x, y, z, ry });
 
@@ -25,7 +34,7 @@ test('คนเดียวกดเข้าคิว = รอ · คนที�
   assert.equal(res.match.phase, 'countdown');
   assert.deepEqual(queueNames(arena), []);
   assert.equal(res.match.fighters.a.hp, HP_MAX);
-  assert.equal(res.match.fighters.a.weapon, 'fists');
+  assert.equal(res.match.fighters.a.weapon, DEFAULT_LOADOUT[0]); // เริ่มด้วยอาวุธหลัก
 });
 
 test('กดซ้ำไม่เข้าคิวสองรอบ · ยกเลิกคิวได้', () => {
@@ -108,7 +117,7 @@ test('ตีได้หลังง้างเสร็จ เลือดล�
 
 test('หลบออกจากระยะระหว่างคู่ง้าง = ไม่โดน', () => {
   const { arena, match, t } = fighting();
-  pickWeaponAt(match, 'a', 'hammer');
+  hold(match, 'a', 'hammer');
   place(match, 'a', 0, 0, 0);
   place(match, 'b', 0, 1.5, Math.PI);
   attack(match, 'a', 0, t);
@@ -119,7 +128,7 @@ test('หลบออกจากระยะระหว่างคู่ง�
 
 test('ลูกธนูบินไปโดนคนที่ยืนอยู่ไกล · มีเสาบังแล้วไม่โดน', () => {
   const { arena, match, t } = fighting();
-  pickWeaponAt(match, 'a', 'bow');
+  hold(match, 'a', 'bow');
   place(match, 'a', 0, -6, 0);
   place(match, 'b', 0, 6, Math.PI);
   attack(match, 'a', 0, t);
@@ -167,19 +176,130 @@ test('หมดเวลา: เลือดมากกว่าชนะ · �
   assert.equal(draw.winner, null);
 });
 
-test('เก็บอาวุธต้องอยู่ใกล้ · ถืออยู่แล้วเก็บอันใหม่ = ของเก่าหล่นที่เท้า', () => {
-  const { match } = fighting();
-  const sword = match.weapons.find((w) => w.kind === 'sword');
-  place(match, 'a', 5, 5);
-  assert.equal(pickWeapon(match, 'a', sword.id), null);
-  place(match, 'a', sword.x, sword.z + 0.5);
-  assert.deepEqual(pickWeapon(match, 'a', sword.id), { weapon: 'sword', dropped: null });
-  const hammer = match.weapons.find((w) => w.kind === 'hammer');
-  place(match, 'a', hammer.x, hammer.z);
-  const res = pickWeapon(match, 'a', hammer.id);
-  assert.equal(res.weapon, 'hammer');
-  assert.equal(res.dropped.kind, 'sword');
-  assert.equal(match.weapons.length, WEAPON_SPOTS.length - 1);
+test('เลือกอาวุธหลัก/รองก่อนเข้าลาน · เริ่มด้วยอาวุธหลัก · ค่าผิดใช้ชุดเริ่มต้น', () => {
+  const arena = createArena();
+  joinQueue(arena, 'a', 'A', 0, ['hammer', 'staff']);
+  joinQueue(arena, 'b', 'B', 0, ['spear', 'spear']); // ซ้ำกัน = ไม่ถูก
+  assert.deepEqual(arena.match.fighters.a.loadout, ['hammer', 'staff']);
+  assert.equal(arena.match.fighters.a.weapon, 'hammer');
+  assert.deepEqual(arena.match.fighters.b.loadout, DEFAULT_LOADOUT);
+  assert.deepEqual(cleanLoadout(['fists', 'bow']), DEFAULT_LOADOUT);
+  assert.deepEqual(cleanLoadout('x'), DEFAULT_LOADOUT);
+  assert.deepEqual(cleanLoadout(['axe', 'bow']), DEFAULT_LOADOUT); // อาวุธที่ถอดออกไปแล้ว (เครื่องที่ยังจำค่าเก่า)
+});
+
+test('สลับอาวุธ: ได้อีกอัน · ต้องรอแป๊บก่อนตี', () => {
+  const arena = createArena();
+  joinQueue(arena, 'a', 'A', 0, ['sword', 'bow']);
+  joinQueue(arena, 'b', 'B', 0);
+  const t = COUNTDOWN_MS;
+  stepDuel(arena, t);
+  const match = arena.match;
+  assert.deepEqual(swapWeapon(match, 'a', undefined, t), { weapon: 'bow', slot: 1 });
+  assert.equal(attack(match, 'a', 0, t + 10), null);
+  assert.ok(attack(match, 'a', 0, t + SWAP_MS));
+  assert.equal(swapWeapon(match, 'a', 1, t + 2000), null); // ถืออันนี้อยู่แล้ว
+});
+
+test('สตามินา: ตี/บล็อกไม่ใช้ · กลิ้งใช้ · ไม่พอกลิ้งไม่ได้ · แดชปิดอยู่ · พักแล้วฟื้น', () => {
+  const { arena, match, t } = fighting();
+  hold(match, 'a', 'sword');
+  attack(match, 'a', 0, t);
+  act(match, 'a', 'block', t + 600, true);
+  assert.equal(match.fighters.a.stamina, STAMINA.max);
+  act(match, 'a', 'block', t + 700, false);
+  assert.ok(act(match, 'a', 'roll', t + 800));
+  assert.equal(match.fighters.a.stamina, STAMINA.max - STAMINA.roll);
+  match.fighters.a.stamina = STAMINA.roll - 1;
+  assert.equal(act(match, 'a', 'roll', t + 2000), null);
+  assert.equal(act(match, 'a', 'dash', t + 2000), null);
+  match.fighters.a.stamina = 0; // หมดเกลี้ยงก็ยังตีได้
+  assert.ok(attack(match, 'a', 0, t + 2000));
+  const before = match.fighters.a.stamina;
+  stepDuel(arena, t + 800 + STAMINA.regenDelay + 100, 0.5);
+  assert.ok(match.fighters.a.stamina > before);
+});
+
+test('กลิ้ง: ช่วงต้นโดนอะไรไม่เข้า · กลิ้งอยู่ตีไม่ได้', () => {
+  const { arena, match, t } = fighting();
+  place(match, 'a', 0, 0, 0);
+  place(match, 'b', 0, 1, Math.PI);
+  attack(match, 'a', 0, t);
+  assert.deepEqual(act(match, 'b', 'roll', t), { act: 'roll', ms: ROLL_MS });
+  assert.equal(attack(match, 'b', Math.PI, t + 10), null);
+  const events = stepDuel(arena, t + WEAPONS.fists.windup);
+  assert.ok(events.some((e) => e.type === 'dodge' && e.target === 'b'));
+  assert.equal(match.fighters.b.hp, HP_MAX);
+  assert.ok(t + WEAPONS.fists.windup < t + ROLL_IFRAME_MS);
+});
+
+test('บล็อก: หันหน้ารับ = ดาเมจลด สตามินาไม่ลด · โดนจากข้างหลังบล็อกไม่ได้', () => {
+  const { arena, match, t } = fighting();
+  hold(match, 'a', 'sword');
+  hold(match, 'b', 'sword');
+  place(match, 'a', 0, 0, 0);
+  place(match, 'b', 0, 1.2, Math.PI); // หันเข้าหา a
+  assert.deepEqual(act(match, 'b', 'block', t, true), { act: 'block', on: true });
+  attack(match, 'a', 0, t);
+  const hit = stepDuel(arena, t + WEAPONS.sword.windup).find((e) => e.type === 'hit');
+  assert.equal(hit.blocked, true);
+  assert.ok(hit.dmg < WEAPONS.sword.dmg);
+  assert.equal(hit.dmg, WEAPONS.sword.dmg - Math.round(WEAPONS.sword.dmg * WEAPONS.sword.guard));
+  assert.equal(match.fighters.b.stamina, STAMINA.max);
+
+  place(match, 'b', 0, 1.2, 0); // หันหลังให้
+  attack(match, 'a', 0, t + 1000);
+  const back = stepDuel(arena, t + 1000 + WEAPONS.sword.windup).find((e) => e.type === 'hit');
+  assert.equal(back.blocked, false);
+  assert.equal(back.dmg, WEAPONS.sword.dmg);
+});
+
+test('ค้อนทุบทะลุการบล็อกครึ่งหนึ่ง · บล็อกนานแค่ไหนการ์ดก็ไม่แตก', () => {
+  const { arena, match, t } = fighting();
+  hold(match, 'a', 'hammer');
+  hold(match, 'b', 'sword');
+  place(match, 'a', 0, 0, 0);
+  place(match, 'b', 0, 1.5, Math.PI);
+  act(match, 'b', 'block', t, true);
+  match.fighters.b.stamina = 0;
+  attack(match, 'a', 0, t);
+  const events = stepDuel(arena, t + WEAPONS.hammer.windup);
+  const hit = events.find((e) => e.type === 'hit');
+  const cut = Math.round(WEAPONS.hammer.dmg * WEAPONS.sword.guard * (1 - WEAPONS.hammer.pierce));
+  assert.equal(hit.blocked, true);
+  assert.equal(hit.dmg, WEAPONS.hammer.dmg - cut);
+  assert.equal(match.fighters.b.blocking, true);
+  assert.ok(!events.some((e) => e.type === 'guardBreak'));
+});
+
+test('โล่ใหญ่: บล็อกได้โดนแค่ 1 · เสียสตามินาต่อครั้ง · ค้อนเสียเพิ่ม · สตามินาไม่พอกันได้แค่ครึ่ง', () => {
+  const { arena, match, t } = fighting();
+  hold(match, 'a', 'sword');
+  hold(match, 'b', 'shield');
+  place(match, 'a', 0, 0, 0);
+  place(match, 'b', 0, 1.2, Math.PI);
+  act(match, 'b', 'block', t, true);
+  attack(match, 'a', 0, t);
+  const hit = stepDuel(arena, t + WEAPONS.sword.windup).find((e) => e.type === 'hit');
+  assert.equal(hit.blocked, true);
+  assert.equal(hit.dmg, SHIELD.chip);
+  assert.equal(match.fighters.b.stamina, STAMINA.max - SHIELD.cost);
+
+  // ค้อนทะลุบล็อก → โล่ยังกันได้ แต่กินสตามินามากกว่า
+  hold(match, 'a', 'hammer');
+  match.fighters.b.stamina = STAMINA.max;
+  attack(match, 'a', 0, t + 2000);
+  const slam = stepDuel(arena, t + 2000 + WEAPONS.hammer.windup).find((e) => e.type === 'hit');
+  assert.equal(slam.dmg, SHIELD.chip);
+  assert.equal(match.fighters.b.stamina, STAMINA.max - Math.round(SHIELD.cost * (1 + 2 * WEAPONS.hammer.pierce)));
+
+  // สตามินาหมด = กันได้แค่ guard ปกติของโล่
+  hold(match, 'a', 'sword');
+  match.fighters.b.stamina = 0;
+  attack(match, 'a', 0, t + 4000);
+  const weak = stepDuel(arena, t + 4000 + WEAPONS.sword.windup).find((e) => e.type === 'hit');
+  assert.equal(weak.blocked, true);
+  assert.equal(weak.dmg, WEAPONS.sword.dmg - Math.round(WEAPONS.sword.dmg * WEAPONS.shield.guard));
 });
 
 test('ตำแหน่ง: บีบให้อยู่ในลาน · ยืนในเสาไม่ได้ · ค่าแปลกทิ้ง', () => {
@@ -204,11 +324,3 @@ test('หลุดตอนอยู่ในคิว = แค่ออกจ�
   assert.deepEqual(forfeit(arena, 'a', 1), []);
   assert.deepEqual(queueNames(arena), []);
 });
-
-function pickWeaponAt(match, id, kind) {
-  const spot = match.weapons.find((w) => w.kind === kind);
-  const keep = { ...match.fighters[id].pose };
-  place(match, id, spot.x, spot.z);
-  pickWeapon(match, id, spot.id);
-  place(match, id, keep.x, keep.z, keep.ry);
-}

@@ -8,7 +8,9 @@ import { animateItem, buildItem, ITEM_NAMES } from './lounge-items.js';
 import { buildWorld, HALF_X, HALF_Z, onDanceFloor, pushOutOfBlocks, SEATS } from './lounge-world.js';
 import { AIR_STEP, blockedAt, cellAt, groundAt, STEP_UP, supportAt } from './lounge-terrain.js';
 import { createFx } from './lounge-fx.js';
-import { createDuel } from './lounge-duel.js';
+import { ARENA_SPEED, createDuel } from './lounge-duel.js';
+import { createCombatInput } from './lounge-lock.js';
+import { actionOf, keyOf, mouseSwapped } from './keybinds.js';
 
 const WALK_SPEED = 3;
 const RUN_SPEED = 5.2; // กด Shift ค้าง
@@ -49,6 +51,9 @@ const COYOTE_MS = 120; // เพิ่งเดินตกขอบไปแป
 const STUCK_MS = 600; // แตะพื้นให้เดินแต่ติดหน้าผานานเท่านี้ → เลิกเดิน ไม่ดันกำแพงค้าง
 // หมุนกล้อง (คลิกขวาลาก): yaw = หมุนรอบตัว · pitch = มุมก้ม (ค่าเดิม ≈ 55° จากแนวราบ)
 const ORBIT_SPEED = 0.008;
+const LOOK_SPEED = 0.0028; // ล็อกเมาส์ในลานประลอง: ขยับเมาส์ 1 px = หมุนกล้องเท่านี้ (rad)
+const WHEEL_SWAP_MS = 220; // ล้อเมาส์หมุนทีเดียวยิงหลาย event → สลับอาวุธได้ครั้งเดียวในช่วงนี้
+const desktopQuery = matchMedia('(hover: hover) and (pointer: fine)');
 const PITCH_DEFAULT = Math.atan2(12, 8.5);
 const PITCH_MIN = 0.22;
 const PITCH_MAX = 1.4;
@@ -159,7 +164,7 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelPick }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelSwap, onDuelAct }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -473,10 +478,11 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   function keyDirection() {
     let kx = 0;
     let kz = 0;
-    if (keys.has('ArrowLeft') || keys.has('KeyA')) kx -= 1;
-    if (keys.has('ArrowRight') || keys.has('KeyD')) kx += 1;
-    if (keys.has('ArrowUp') || keys.has('KeyW')) kz -= 1;
-    if (keys.has('ArrowDown') || keys.has('KeyS')) kz += 1;
+    // keys เก็บชื่อท่า (up/down/left/right) ไม่ใช่ปุ่ม → เปลี่ยนปุ่มเดินในหน้าตั้งค่าได้
+    if (keys.has('left')) kx -= 1;
+    if (keys.has('right')) kx += 1;
+    if (keys.has('up')) kz -= 1;
+    if (keys.has('down')) kz += 1;
     const c = Math.cos(camYaw);
     const s = Math.sin(camYaw);
     return [kx * c + kz * s, -kx * s + kz * c];
@@ -488,7 +494,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     if (kx || kz) {
       walkTo = null;
       if (entry.sit !== null) standUp();
-      return { dx: kx, dz: kz, want: (running ? RUN_SPEED : WALK_SPEED) * (duel?.moveScale() ?? 1) };
+      if (duel?.inArena()) return { dx: kx, dz: kz, want: ARENA_SPEED * duel.moveScale() };
+      return { dx: kx, dz: kz, want: running ? RUN_SPEED : WALK_SPEED };
     }
     if (!walkTo) return { dx: 0, dz: 0, want: 0 };
     if (entry.sit !== null) standUp();
@@ -578,10 +585,16 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     const { dx, dz, want } = desiredMove(entry);
     const len = Math.hypot(dx, dz);
     const vel = entry.vel;
-    // เร่งเร็วกว่าชะลอนิดหน่อย → ออกตัวฉับไวแต่หยุดนุ่ม
-    const k = 1 - Math.exp(-dt * (len > 0 ? 10 : 7));
-    vel.x += ((len > 0 ? (dx / len) * want : 0) - vel.x) * k;
-    vel.z += ((len > 0 ? (dz / len) * want : 0) - vel.z) * k;
+    const forced = duel?.motion(); // กลิ้ง/แดชในลาน: พุ่งด้วยความเร็วคงที่ ไม่สนปุ่มเดินระหว่างท่า
+    if (forced) {
+      vel.x = forced.vx;
+      vel.z = forced.vz;
+    } else {
+      // เร่งเร็วกว่าชะลอนิดหน่อย → ออกตัวฉับไวแต่หยุดนุ่ม
+      const k = 1 - Math.exp(-dt * (len > 0 ? 10 : 7));
+      vel.x += ((len > 0 ? (dx / len) * want : 0) - vel.x) * k;
+      vel.z += ((len > 0 ? (dz / len) * want : 0) - vel.z) * k;
+    }
     const sp = Math.hypot(vel.x, vel.z);
     if (sp < 0.05 && len === 0) vel.x = vel.z = 0;
     if (sp > 0.01) moveBy(entry, vel.x, vel.z, dt);
@@ -589,7 +602,15 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     // ชนจนขยับไม่ได้จริง → ความเร็วที่โชว์ลดลงตาม (ไม่ก้าวขาอยู่กับที่)
     const moved = Math.hypot(entry.pos.x - prevX, entry.pos.z - prevZ) / Math.max(dt, 0.001);
     entry.speed = Math.min(sp, moved + 0.4) / WALK_SPEED;
-    if (sp > 0.25) entry.ry = angleLerp(entry.ry, Math.atan2(vel.x, vel.z), 1 - Math.exp(-dt * 12));
+    // หันตัวแบบนุ่ม (lerp) ทุกกรณี · ตัวเลขยิ่งมาก = หมุนทันใจขึ้น
+    const turn = (to, rate) => (entry.ry = angleLerp(entry.ry, to, 1 - Math.exp(-dt * rate)));
+    const faceLock = duel?.faceLock();
+    const lockAt = duel?.lockTarget();
+    if (forced) turn(Math.atan2(vel.x, vel.z), 30); // กลิ้งไปทางไหน หันไปทางนั้น (ท่าม้วนตัวไปข้างหน้า)
+    else if (faceLock !== null && faceLock !== undefined) turn(faceLock, 28); // กำลังฟัน: หันทางที่ฟันจนจบท่า แม้เดินอยู่
+    else if (lockAt) turn(Math.atan2(lockAt.x - entry.pos.x, lockAt.z - entry.pos.z), 18); // ล็อกเป้า = หันหาเป้าตลอด เดินข้าง/ถอยได้
+    // นอกนั้น (รวมตอนเต็มจอ) หันตามทิศที่เดิน WASD — เดิมเต็มจอหันตามกล้อง แต่เดินถอยแล้วดูเหมือนเดินถอยหลังแปลกๆ
+    else if (sp > 0.25) entry.ry = angleLerp(entry.ry, Math.atan2(vel.x, vel.z), 1 - Math.exp(-dt * 12));
     const now = performance.now();
     updateVertical(entry, dt, now);
     checkStuck(entry, moved, now);
@@ -656,6 +677,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   }
   function followCamera(dt) {
     const [x, y, z] = cameraGoal();
+    // ล็อกเป้า: หมุนกล้องไปอยู่หลังเรา มองผ่านไปที่เป้า (นุ่มๆ ไม่ตัดภาพ)
+    const target = duel?.lockTarget();
+    const entry = me();
+    if (target && entry) {
+      const want = Math.atan2(-(target.x - entry.pos.x), -(target.z - entry.pos.z));
+      camYaw = angleLerp(camYaw, want, 1 - Math.exp(-dt * 7));
+    }
     const k = 1 - Math.exp(-dt * 4);
     focus.x += (x - focus.x) * k;
     focus.y += (y - focus.y) * (1 - Math.exp(-dt * 3)); // กระโดดแล้วกล้องไม่เด้งตามแรงๆ
@@ -849,6 +877,36 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     camera.updateProjectionMatrix();
   }
 
+  // ---------- โหมดจริงจัง: เต็มจอ + ล็อกเมาส์ (รายละเอียดใน lounge-lock.js) ----------
+  const combat = createCombatInput({
+    canvas,
+    view: container,
+    fullscreenEl: container.closest('.game') ?? container,
+    onLook: (dx, dy) => {
+      if (!duel.isLockedOn()) camYaw -= dx * LOOK_SPEED; // ล็อกเป้าอยู่ = กล้องหันหาเป้าเอง เมาส์ปรับแค่ก้ม/เงย
+      camPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, camPitch + dy * LOOK_SPEED));
+      placeCamera();
+    },
+    // ซ้าย = ตี · ขวาค้าง = บล็อก (สลับกันได้ในหน้าตั้งค่าปุ่ม) · -1 = หลุดล็อก (ปล่อยการ์ด)
+    onButton: (button, down) => {
+      if (!duel.inArena()) return;
+      if (button === -1) return duel.block(false);
+      const [hit, guard] = mouseSwapped() ? [2, 0] : [0, 2];
+      if (button === hit && down) duel.attack();
+      else if (button === guard) duel.block(down);
+    },
+    onLockChange: (locked) => {
+      if (locked) walkTo = null;
+    },
+  });
+  // Enter ในลาน / ปุ่มเต็มจอ: เข้าเต็มจอแล้วล็อกเมาส์ทันที (ถ้าอยู่ในลาน) · ออกเต็มจอ = ปลดล็อก
+  function toggleCombatScreen() {
+    const entering = !combat.isFullscreen();
+    combat.toggleFullscreen();
+    if (entering && duel.inArena()) combat.lock();
+    else if (!entering) combat.unlock();
+  }
+
   // ---------- ลานประลอง (รายละเอียดใน lounge-duel.js) ----------
   duel = createDuel({
     scene, floor, fx, camera, container, layer,
@@ -858,7 +916,20 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     removeAvatar: remove,
     myId: () => myId,
     notice: (text) => onNotice(text),
-    send: { attack: (ry) => onDuelAttack?.({ ry }), pick: (id) => onDuelPick?.(id) },
+    send: {
+      attack: (ry) => onDuelAttack?.({ ry }),
+      swap: (slot) => onDuelSwap?.({ slot }),
+      act: (type, on) => onDuelAct?.({ type, on }),
+    },
+    // ทิศปุ่มเดินที่กดอยู่ (เทียบมุมกล้อง) ไว้ให้กลิ้ง/แดชไปทางนั้น · ไม่กด = null
+    moveDir: () => {
+      const [x, z] = keyDirection();
+      const l = Math.hypot(x, z);
+      return l ? { x: x / l, z: z / l } : null;
+    },
+    releaseMouse: () => combat.unlock(),
+    isLocked: () => combat.isLocked(),
+    isDesktop: () => desktopQuery.matches,
     setLand: (next) => (land = next ?? LOUNGE_LAND),
     stopWalking: () => (walkTo = null),
     // ry = ทิศที่ตัวเราหัน → กล้องไปอยู่ข้างหลังตัว มองไปทางเดียวกัน (เข้าลานแล้วเห็นคู่ต่อสู้ข้างหน้า) · ไม่ส่ง = มุมเดิม
@@ -936,8 +1007,14 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
     placeCamera();
   }
+  let lastWheelSwap = 0;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault(); // ไม่งั้นหน้าเว็บเลื่อนไปด้วย
+    if (combat.isLocked() && duel.inArena()) {
+      if (e.timeStamp - lastWheelSwap > WHEEL_SWAP_MS) duel.swap();
+      lastWheelSwap = e.timeStamp;
+      return;
+    }
     setZoom(zoom * Math.exp(e.deltaY * 0.0012));
   }, { passive: false });
   const touches = new Map(); // pointerId → {x, y}
@@ -950,7 +1027,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   let orbit = null; // { id, x, y }
   canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // ไม่ให้เมนูคลิกขวาเด้งทับตอนหมุน
   canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'mouse' || (e.button !== 2 && e.button !== 1)) return;
+    if (combat.isLocked() || e.pointerType !== 'mouse' || (e.button !== 2 && e.button !== 1)) return;
     e.preventDefault();
     orbit = { id: e.pointerId, x: e.clientX, y: e.clientY };
     try {
@@ -962,7 +1039,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   });
   canvas.addEventListener('pointermove', (e) => {
     if (orbit?.id !== e.pointerId) return;
-    camYaw -= (e.clientX - orbit.x) * ORBIT_SPEED;
+    if (!duel.isLockedOn()) camYaw -= (e.clientX - orbit.x) * ORBIT_SPEED;
     camPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, camPitch + (e.clientY - orbit.y) * ORBIT_SPEED));
     orbit.x = e.clientX;
     orbit.y = e.clientY;
@@ -1000,11 +1077,13 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let downAt = null;
-  canvas.addEventListener('pointerdown', (e) => (downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null));
+  canvas.addEventListener('pointerdown', (e) => (downAt = e.button === 0 && !combat.isLocked() ? { x: e.clientX, y: e.clientY } : null));
   canvas.addEventListener('pointerup', (e) => {
     if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 8 || !me()) return;
     downAt = null;
     container.focus({ preventScroll: true });
+    // ในลานประลองบนคอม: คลิกลาน = ล็อกเมาส์เข้าโหมดสู้ (ไม่ใช่คลิกเดิน)
+    if (duel.inArena() && e.pointerType === 'mouse') return combat.lock();
     const rect = canvas.getBoundingClientRect();
     pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
@@ -1021,12 +1100,15 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
 
   // ---------- คีย์บอร์ด: รับทั้งหน้าเว็บ ไม่ต้องคลิกที่ลานก่อน ----------
   // ยกเว้น: กำลังพิมพ์ / โฟกัสอยู่ที่ตัวควบคุมที่ใช้ปุ่มเหล่านี้เอง
-  const MOVE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS']);
+  // เดิน/กระโดด/ต่อย = ปุ่มที่ผู้เล่นตั้งเอง (keybinds.js) · ที่เหลือในลานฟังเพลงเป็นปุ่มตายตัว
+  const MOVE_ACTIONS = new Set(['up', 'down', 'left', 'right']);
   const zoomIn = () => setZoom(zoom / ZOOM_STEP);
   const zoomOut = () => setZoom(zoom * ZOOM_STEP);
+  const BOUND_ACTIONS = {
+    jump: () => gesture('jump'),
+    attack: () => gesture('punch'), // นอกลานประลอง ปุ่มโจมตี = ต่อย
+  };
   const ACTION_KEYS = {
-    Space: () => gesture('jump'),
-    KeyF: () => gesture('punch'),
     KeyE: toggleSit,
     KeyG: dropHeld,
     Equal: zoomIn, // ปุ่ม = / + ข้าง backspace
@@ -1046,29 +1128,48 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const pressedAt = new Map();
   const releaseTimers = new Map();
 
+  // ในลาน ถ้ากลิ้งใช้ Shift (ค่าเริ่มต้น) → Shift ไม่วิ่ง ไม่งั้นกดกลิ้งทีไรวิ่งค้างไปด้วย · ลานฟังเพลง Shift วิ่งเหมือนเดิม
+  const shiftRuns = (e) => e.shiftKey && !(duel.inArena() && keyOf('roll').startsWith('Shift'));
   window.addEventListener('keydown', (e) => {
-    running = e.shiftKey;
+    running = shiftRuns(e);
     if (!canControl(e)) return;
-    if (MOVE_KEYS.has(e.code)) {
-      if (ownsArrows(e.target)) return;
-      clearTimeout(releaseTimers.get(e.code)); // กดซ้ำเร็วๆ อย่าให้การปล่อยครั้งก่อนมาตัด
-      if (!keys.has(e.code)) pressedAt.set(e.code, performance.now());
-      keys.add(e.code);
-    } else if (ACTION_KEYS[e.code]) {
-      if (e.code === 'Space' && isButton(e.target)) return; // Space บนปุ่ม = กดปุ่มตามปกติ
+    const action = actionOf(e.code);
+    if (duel.inArena()) {
+      // Tab บนปุ่ม/แผงที่โฟกัสอยู่ = เลื่อนโฟกัสตามปกติ (คนใช้คีย์บอร์ด) ไม่ใช่ล็อกเป้า
+      if (action === 'lockon' && e.code === 'Tab' && isButton(e.target)) return;
+      if (action === 'fullscreen' && !isButton(e.target)) {
+        if (!e.repeat) toggleCombatScreen();
+        return e.preventDefault();
+      }
+      if (duel.key(action, true, e.repeat)) return e.preventDefault();
+    }
+    // Space/Enter บนปุ่มที่โฟกัสอยู่ = กดปุ่มตามปกติ ไม่ใช่กระโดด
+    const onButton = isButton(e.target) && (e.code === 'Space' || e.code === 'Enter');
+    if (MOVE_ACTIONS.has(action)) {
+      if (ownsArrows(e.target) && e.code.startsWith('Arrow')) return;
+      clearTimeout(releaseTimers.get(action)); // กดซ้ำเร็วๆ อย่าให้การปล่อยครั้งก่อนมาตัด
+      if (!keys.has(action)) pressedAt.set(action, performance.now());
+      keys.add(action);
+    } else if (BOUND_ACTIONS[action] && !onButton) {
+      if (!e.repeat) BOUND_ACTIONS[action]();
+    } else if (ACTION_KEYS[e.code] && !onButton) {
       if (!e.repeat) ACTION_KEYS[e.code]();
     } else return;
     e.preventDefault();
   });
   window.addEventListener('keyup', (e) => {
-    running = e.shiftKey;
-    const held = performance.now() - (pressedAt.get(e.code) ?? 0);
-    if (held >= MIN_HOLD_MS) keys.delete(e.code);
-    else releaseTimers.set(e.code, setTimeout(() => keys.delete(e.code), MIN_HOLD_MS - held));
+    running = shiftRuns(e);
+    const action = actionOf(e.code);
+    duel.key(action, false, false); // ปล่อยปุ่มบล็อก = ลดการ์ด
+    if (!MOVE_ACTIONS.has(action)) return;
+    const held = performance.now() - (pressedAt.get(action) ?? 0);
+    if (held >= MIN_HOLD_MS) keys.delete(action);
+    else releaseTimers.set(action, setTimeout(() => keys.delete(action), MIN_HOLD_MS - held));
   });
   const releaseKeys = () => {
     keys.clear();
     running = false;
+    duel.block(false); // สลับหน้าต่างตอนยกการ์ดค้าง → ไม่ให้การ์ดค้าง
   };
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', releaseKeys);
@@ -1085,6 +1186,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       entry.ry = Math.atan2(0, 1);
       sendPose(performance.now(), true);
     },
+    debugDuel: () => duel.debugState(),
     debugItems: () => [...ground.entries()].map(([id, g]) => ({ id, kind: g.kind, x: g.x, z: g.z })),
     // รายชื่อทั้งห้อง (ตอนเข้าห้อง/ต่อใหม่) — ล้างของเก่าทิ้งแล้ววาดใหม่หมด
     reset(list, you, items = [], match = null) {
@@ -1107,8 +1209,12 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       end: (ev) => duel.end(ev),
       close: () => duel.close(),
       pose: (ev) => duel.pose(ev),
+      act: (ev) => duel.act(ev),
+      stamina: (values) => duel.stamina(values),
+      dodge: (ev) => duel.dodge(ev),
       inArena: () => duel.inArena(),
     },
+    toggleFullscreen: toggleCombatScreen,
     add,
     remove,
     pose({ id, x, y, z, ry, sit }) {

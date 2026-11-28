@@ -131,6 +131,14 @@ const GESTURE_SEC = { jump: 0.8, punch: 0.4, wave: 1.6, dance: 2.4, clap: 1.4, h
 // ท่าอาวุธในลานประลอง: ความยาวท่าตั้งตาม windup ของอาวุธ (play(type, sec)) ค่านี้เป็นค่าเริ่มต้น
 // ท่าแบ่งเป็น ง้าง (ช่วง windup) → ปล่อย → คืนท่า · ตัวเลข hit = สัดส่วนเวลาที่ "โดนจริง" ในท่า
 Object.assign(GESTURE_SEC, { jab: 0.3, slash: 0.45, stab: 0.5, slam: 1, shoot: 0.6, cast: 0.75, flinch: 0.3 });
+// ท่าหลบในลาน: กลิ้ง (แดชปิดไว้ แต่เก็บท่าไว้เผื่อเปิดกลับ)
+Object.assign(GESTURE_SEC, { roll: 0.48, dash: 0.25 });
+// ท่าที่ค่อยๆ ผสมเข้า/ออกจากท่าเดิน (ไม่งั้นแขนวาร์ปจากท่าเดินไปท่าตีในเฟรมเดียว ดูแข็ง)
+// ท่าหมุนรอบตัว (เต้น) ไม่ผสม เพราะผสมตอนจบจะหมุนย้อนกลับ
+const BLEND_IN = new Set(['jab', 'slash', 'stab', 'slam', 'shoot', 'cast', 'punch', 'flinch', 'wave', 'clap']);
+const BLEND_IN_SEC = 0.07;
+const BLEND_OUT_SEC = 0.14;
+const ease = (t) => t * t * (3 - 2 * t); // smoothstep: ออกตัวช้า เร่ง แล้วค่อยหยุด
 
 const pulse = (t) => Math.sin(Math.PI * Math.min(1, Math.max(0, t))); // 0 → 1 → 0
 
@@ -213,6 +221,8 @@ export function createAvatar(look) {
   let airK = 0; // 0 = ยืนพื้น · 1 = ลอยเต็มที่ (ไล่ค่าให้ท่าไม่วูบ)
   let airV = 0; // +1 พุ่งขึ้น · -1 ร่วงลง (เฉลี่ยแล้ว)
   let headLag = 0; // หัวเด้งตามตัวช้ากว่านิดนึง (secondary motion)
+  let guardOn = false; // ยกการ์ด (ในลานประลอง) · ค้างไว้จนสั่งลด ไม่ใช่ท่าชั่วคราว
+  let guardK = 0;
 
   function land(strength) {
     squash = Math.max(squash, 0.35 + strength * 0.65);
@@ -247,6 +257,20 @@ export function createAvatar(look) {
     if (flashT <= 0) return;
     flashT -= dt;
     if (flashT <= 0) for (const m of flashMats()) m.emissive.setHex(0x000000);
+  }
+
+  // ยกการ์ด: แขนซ้ายยกโล่/แขนบังหน้า แขนขวาถืออาวุธขวางตัว · ค่อยๆ ยก/ลด (ไม่วาร์ป)
+  function applyGuard(dt) {
+    guardK += ((guardOn ? 1 : 0) - guardK) * (1 - Math.exp(-dt * 16));
+    const g = guardK;
+    if (g < 0.01) return;
+    const mix = (a, b) => a + (b - a) * g;
+    parts.armL.rotation.set(mix(parts.armL.rotation.x, -1.25), 0, mix(parts.armL.rotation.z, 0.55));
+    parts.armR.rotation.set(mix(parts.armR.rotation.x, -1), 0, mix(parts.armR.rotation.z, -0.45));
+    body.rotation.x += 0.08 * g; // ย่อตัวตั้งรับ
+  }
+  function setGuard(on) {
+    guardOn = Boolean(on);
   }
 
   function setBlink(closed) {
@@ -320,6 +344,7 @@ export function createAvatar(look) {
     parts.armR.rotation.set(swing * 0.95 * (1 - holding * 0.6) + pump - 0.3 * sitK - holding * 0.35 + airArmX * airK * (1 - holding * 0.5), 0, 0.08 + sway + airArmZ * airK + squash * 0.3);
     if (parts.held) animateItem(parts.held, clock);
     parts.backAnim?.(dt, { clock, speed: move, air }); // ปีกกระพือ / ผ้าคลุมปลิว / ไฟเจ็ตแพ็ก
+    applyGuard(dt);
 
     // กะพริบตา
     blinkIn -= dt;
@@ -352,33 +377,38 @@ export function createAvatar(look) {
     const dur = gesture.dur ?? GESTURE_SEC[gesture.type];
     const p = Math.min(gesture.t / dur, 1);
     const wave = (hz) => Math.sin(gesture.t * hz);
-    // ง้าง 0→1 จนถึงจังหวะโดน · ปล่อย 0→1 หลังจากนั้น
+    // ท่าเดิน/ยืนของเฟรมนี้ (คำนวณไว้ข้างบนแล้ว) → ไว้ผสมกับท่าตีตอนเริ่มและตอนจบท่า
+    const blend = BLEND_IN.has(gesture.type);
+    const base = blend ? posed().map((v) => [v.x, v.y, v.z]) : null;
+    // ง้าง (wind 0→1) จนถึงจังหวะโดน → ปล่อย: ท่าง้างคลายออก (pre 1→0) พร้อมกับท่าฟัน (strike) พุ่งขึ้นเร็วแล้วค่อยคืน
+    // ทั้งสามค่าต่อเนื่องกันตลอด ไม่มีเฟรมไหนกระโดด → ดูมีน้ำหนัก ไม่แข็ง
     const hp = gesture.hit ?? 0.35;
-    const wind = Math.min(1, p / hp);
     const rel = p <= hp ? 0 : (p - hp) / (1 - hp);
-    const strike = p <= hp ? 0 : Math.max(0, 1 - rel * 1.4);
+    const wind = ease(Math.min(1, p / hp));
+    const pre = p <= hp ? wind : 1 - ease(Math.min(1, rel * 4));
+    const strike = p <= hp ? 0 : ease(Math.min(1, rel * 5)) * (1 - ease(Math.min(1, Math.max(0, rel - 0.25) / 0.6)));
     switch (gesture.type) {
-      case 'jab': // ต่อย/แทงมีดสลับมือ
-        parts.armR.rotation.set(-Math.PI / 2 * Math.max(wind * 0.3, strike + (p > hp ? 0.4 * (1 - rel) : 0)), 0, 0);
+      case 'jab': // ต่อย/แทงมีดสลับมือ: ดึงหมัดกลับนิดนึง แล้วพุ่ง
+        parts.armR.rotation.set((-Math.PI / 2) * (0.3 * pre + strike) + 0.25 * pre, 0, 0);
         parts.armL.rotation.set(-0.6 * strike, 0, -0.1);
-        body.rotation.y = -0.3 * strike;
+        body.rotation.y = 0.15 * pre - 0.3 * strike;
         break;
-      case 'slash': // ดาบ: ยกขึ้นเหนือหัว แล้วฟันเฉียงลง
-        parts.armR.rotation.set(-2.8 * wind + (p > hp ? 3.3 * Math.min(1, rel * 2.5) : 0), 0, 0.3 - 0.5 * strike);
-        body.rotation.y = 0.3 * wind * (p <= hp ? 1 : 0) - 0.5 * strike;
-        body.position.z = 0.15 * strike;
+      case 'slash': // ดาบ: ยกขึ้นเหนือหัว บิดตัวไปหลัง แล้วฟันเฉียงลงพร้อมบิดตัวกลับ
+        parts.armR.rotation.set(-2.8 * pre + 0.5 * strike, 0, 0.3 - 0.5 * strike);
+        body.rotation.y = 0.35 * pre - 0.5 * strike;
+        body.position.z += 0.15 * strike;
         break;
       case 'stab': // หอก: ดึงหลัง แล้วแทงตรงไปข้างหน้า
         parts.armR.rotation.set(-1.5, 0, 0);
         parts.armL.rotation.set(-1.3, 0, 0.3);
-        if (parts.held) parts.held.position.y = -0.47 + 0.35 * wind * (p <= hp ? 1 : 0) - 0.45 * strike;
-        body.position.z = -0.12 * (p <= hp ? wind : 0) + 0.3 * strike;
+        if (parts.held) parts.held.position.y = -0.47 + 0.35 * pre - 0.45 * strike;
+        body.position.z += -0.12 * pre + 0.3 * strike;
         body.rotation.x = 0.15 * strike;
         if (p >= 1 && parts.held) parts.held.position.y = -0.47;
         break;
       case 'slam': { // ค้อน: สองมือยกสูง ตัวแอ่นไปหลัง → ทุบพื้นเต็มแรง
-        const up = p <= hp ? wind : Math.max(0, 1 - rel * 4);
-        const down = p <= hp ? 0 : Math.min(1, rel * 4) * (1 - Math.max(0, rel - 0.6) / 0.4);
+        const up = pre;
+        const down = p <= hp ? 0 : ease(Math.min(1, rel * 4)) * (1 - ease(Math.max(0, rel - 0.6) / 0.4));
         parts.armR.rotation.set(-3 * up - 1.2 * down, 0, 0.1);
         parts.armL.rotation.set(-3 * up - 1.2 * down, 0, -0.1);
         body.rotation.x = -0.25 * up + 0.4 * down;
@@ -387,14 +417,36 @@ export function createAvatar(look) {
       }
       case 'shoot': // ธนู: ยื่นแขนซ้าย ง้างสายด้วยแขนขวา แล้วปล่อย
         parts.armR.rotation.set(-1.55, 0, 0);
-        parts.armL.rotation.set(-1.5, 0, -0.2 - 0.4 * (p <= hp ? wind : 1 - rel));
-        body.rotation.y = 0.5 * (p <= hp ? wind : 1 - rel);
+        parts.armL.rotation.set(-1.5, 0, -0.2 - 0.4 * pre);
+        body.rotation.y = 0.5 * pre;
         break;
       case 'cast': // คทา: ชูคทาขึ้น แล้วชี้ไปข้างหน้า
-        parts.armR.rotation.set(-2.6 * wind + (p > hp ? 1.2 * Math.min(1, rel * 3) : 0), 0, 0.15);
+        parts.armR.rotation.set(-2.6 * pre - 1.4 * strike, 0, 0.15);
         parts.armL.rotation.set(-1.2 * strike, 0, -0.4);
-        body.position.y += 0.06 * wind * (p <= hp ? 1 : 0);
+        body.position.y += 0.06 * pre;
         break;
+      case 'roll': { // กลิ้ง: ม้วนตัวรอบสะโพก 1 รอบ (ตัวจริงเลื่อนไปข้างหน้าจาก lounge.js)
+        const a = Math.PI * 2 * (0.5 - 0.5 * Math.cos(Math.PI * p));
+        const c = 0.6; // หมุนรอบจุดสูงจากพื้นเท่านี้ ไม่ใช่รอบเท้า (หัวจะได้ไม่มุดพื้น)
+        const tuck = pulse(p);
+        body.rotation.x = a;
+        body.position.y += c - c * Math.cos(a) - 0.25 * tuck;
+        body.position.z += -c * Math.sin(a);
+        body.scale.setScalar(1 - 0.15 * tuck);
+        parts.legL.rotation.x = parts.legR.rotation.x = -1.6 * tuck;
+        parts.armL.rotation.set(-1.8 * tuck, 0, 0.2);
+        parts.armR.rotation.set(-1.8 * tuck, 0, -0.2);
+        break;
+      }
+      case 'dash': { // แดช: โน้มตัวพุ่ง แขนเหวี่ยงไปหลัง
+        const k = pulse(p);
+        body.rotation.x = 0.45 * k;
+        parts.armL.rotation.set(0.9 * k, 0, -0.2);
+        parts.armR.rotation.set(0.9 * k, 0, 0.2);
+        parts.legL.rotation.x = -0.6 * k;
+        parts.legR.rotation.x = 0.5 * k;
+        break;
+      }
       case 'flinch': // โดนตี: สะดุ้งไปหลัง
         body.rotation.x = -0.35 * Math.sin(Math.PI * p);
         parts.head.rotation.x = -0.3 * Math.sin(Math.PI * p);
@@ -459,8 +511,20 @@ export function createAvatar(look) {
         parts.armR.rotation.z = 2.4;
         break;
     }
+    // ผสมท่า: ต้นท่าค่อยๆ ยกจากท่าเดิน · ท้ายท่าค่อยๆ คืนท่าเดิน (ขาที่ท่าตีไม่ได้แตะ = เดินต่อเหมือนเดิม)
+    if (base) {
+      const w = ease(Math.min(1, gesture.t / BLEND_IN_SEC, Math.max(0, dur - gesture.t) / BLEND_OUT_SEC));
+      if (w < 1) {
+        posed().forEach((v, i) => {
+          const [x, y, z] = base[i];
+          v.set(x + (v.x - x) * w, y + (v.y - y) * w, z + (v.z - z) * w);
+        });
+      }
+    }
     if (p >= 1) gesture = null;
   }
+  // ส่วนของตัวที่ท่าต่างๆ ขยับ (ไว้จำ/ผสมท่า)
+  const posed = () => [parts.armL.rotation, parts.armR.rotation, parts.head.rotation, body.rotation, body.position];
 
   return {
     root,
@@ -468,6 +532,7 @@ export function createAvatar(look) {
     play,
     setLook: build,
     setHeld,
+    setGuard,
     held: () => heldKind,
     isBusy: () => gesture !== null,
     sitAmount: () => sitK,

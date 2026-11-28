@@ -63,7 +63,7 @@ test('ช่วงนับถอยหลัง บอทไม่เดิน 
   assert.equal(match.pending.length, 0);
 });
 
-test('บอทไปเก็บอาวุธก่อน แล้วตีคนที่ยืนนิ่งจนเลือดลด', () => {
+test('บอทเริ่มด้วยชุดอาวุธของตัวเอง แล้วตีคนที่ยืนนิ่งจนเลือดลด', () => {
   const arena = createArena();
   const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(3));
   run(arena, 0, COUNTDOWN_MS + 20000);
@@ -97,13 +97,14 @@ test('บอทระดับยากหลบค้อนที่ง้า�
     const me = match.fighters.a;
     const bot = match.fighters[match.botId];
     me.weapon = 'hammer';
-    match.weapons = []; // บอทใช้มือเปล่า ไม่วิ่งไปเก็บอาวุธ
     let hits = 0;
     let lastHp = bot.hp;
     run(arena, 0, COUNTDOWN_MS + 30000, (now) => {
       me.pose.x = bot.pose.x;
       me.pose.z = bot.pose.z - 1.5;
       me.pose.ry = 0;
+      me.stamina = 100; // ให้คนทุบได้ตลอด วัดแค่การหลบของบอท
+      me.hp = 100; // บอทตีกลับได้ ไม่ให้แมตช์จบก่อนนับครบ
       if (match.phase === 'fight') attack(match, 'a', 0, now);
       if (bot.hp < lastHp) hits += 1;
       lastHp = bot.hp;
@@ -111,7 +112,9 @@ test('บอทระดับยากหลบค้อนที่ง้า�
     });
     return hits;
   };
-  assert.ok(hitsFor('hard') < hitsFor('easy'));
+  const hard = hitsFor('hard');
+  const easy = hitsFor('easy');
+  assert.ok(hard < easy, `hard ${hard} easy ${easy}`);
 });
 
 test('เสาบังแนวยิง', () => {
@@ -143,4 +146,16 @@ test('โหมดลองอาวุธ: หุ่นไม่เดิน �
   assert.ok(dummy.hp > 0);
   assert.equal(dummy.pose.x, start.x);
   assert.equal(arena.wins.size, 0);
+});
+
+test('บอทถืออาวุธยิงตอนอยู่ไกล สลับเป็นอาวุธประชิดตอนเข้าใกล้', () => {
+  const arena = createArena();
+  const { match } = startBotMatch(arena, 'a', 'A', 'normal', 0, LOOK, seeded(2));
+  const bot = match.fighters[match.botId];
+  bot.loadout = ['sword', 'bow'];
+  const me = match.fighters.a;
+  let now = run(arena, 0, COUNTDOWN_MS + 1500, () => { me.pose.x = 0; me.pose.z = 8; me.hp = 100; bot.pose.x = 0; bot.pose.z = -8; });
+  assert.equal(bot.weapon, 'bow');
+  run(arena, now, 1500, () => { me.pose.x = bot.pose.x; me.pose.z = bot.pose.z + 1.5; me.hp = 100; });
+  assert.equal(bot.weapon, 'sword');
 });

@@ -1441,3 +1441,124 @@ kbd {
 .duel-option small { display: block; color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
 .lounge-panel :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .lounge-panel { animation: none; } }
+
+/* ---------- เลือกอาวุธหลัก/รอง (เมนูประลอง) ---------- */
+/* การ์ด 3×3 · ชี้/โฟกัส = รายละเอียดเปลี่ยนตาม · ช่องที่เลือกมีเลข 1/2 กำกับ (ไม่ใช้สีอย่างเดียว) */
+.lounge-panel.duel-menu { width: min(440px, calc(100% - 20px)); overflow-y: auto; overscroll-behavior: contain; }
+.loadout { display: grid; gap: 8px; }
+.loadout-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.loadout-slot {
+  display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; text-align: left;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line);
+  transition: background-color var(--t-fast) ease-out, box-shadow var(--t-fast) ease-out;
+}
+.loadout-slot small { color: var(--muted); font-size: 0.7rem; }
+.loadout-slot strong { font: 700 0.95rem/1.2 var(--font-display); }
+.loadout-slot:hover { background: var(--surface-2); }
+.loadout-slot[aria-pressed="true"] { background: var(--surface-2); box-shadow: inset 0 0 0 2px var(--amber); }
+.loadout-help { margin: 0; color: var(--faint); font-size: 0.72rem; line-height: 1.4; }
+.loadout-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.weapon-card {
+  position: relative; display: grid; gap: 1px; min-height: 58px; padding: 7px 8px; border-radius: 10px; text-align: left;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line);
+  transition: background-color var(--t-fast) ease-out, box-shadow var(--t-fast) ease-out, transform var(--t-fast) ease-out;
+}
+.weapon-card:hover { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.weapon-card:active { transform: scale(0.97); }
+.weapon-card.is-picked { box-shadow: inset 0 0 0 1px #feae34; }
+.weapon-card[aria-pressed="true"] { background: var(--surface-3); box-shadow: inset 0 0 0 2px var(--amber); }
+.wc-type { color: var(--faint); font-size: 0.64rem; }
+.weapon-card strong { font-weight: 600; font-size: 0.84rem; line-height: 1.25; }
+.wc-dmg { color: #fee761; font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.wc-slot {
+  position: absolute; top: 5px; right: 6px; display: grid; place-items: center; width: 18px; height: 18px;
+  border-radius: 5px; background: #feae34; color: #181425; font: 800 0.7rem/1 var(--font-ui); font-style: normal;
+}
+.loadout-detail { display: grid; gap: 3px; padding: 8px 10px; border-radius: 10px; background: var(--surface); min-height: 150px; font-size: 0.78rem; }
+.wd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wd-head strong { font: 700 0.95rem/1.2 var(--font-display); }
+.wd-type { color: var(--muted); font-size: 0.7rem; }
+.loadout-detail p { margin: 0; line-height: 1.4; }
+.wd-hint { color: var(--text); }
+.wd-stats { display: grid; gap: 3px; margin: 2px 0; }
+.wd-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 6px; }
+.wd-row dt { color: var(--muted); font-size: 0.72rem; }
+.wd-row dd { display: grid; grid-template-columns: 1fr 52px; align-items: center; gap: 6px; margin: 0; }
+.wd-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-3); }
+.wd-bar i { display: block; height: 100%; background: #feae34; transform-origin: left; }
+.wd-val { color: var(--text); font-size: 0.7rem; text-align: right; font-variant-numeric: tabular-nums; }
+.wd-meta { color: var(--faint); font-size: 0.7rem; }
+.loadout-detail .is-pro { color: #4ade80; }
+.loadout-detail .is-con { color: var(--coral); }
+/* โหมด 3 ปุ่มเรียงแถวเดียว ให้เห็นพร้อมการ์ดอาวุธไม่ต้องเลื่อน · คำอธิบายยาวย้ายไปอยู่ใน title */
+.duel-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.duel-modes .duel-option { grid-template-columns: 1fr; justify-items: center; gap: 4px; padding: 9px 6px; text-align: center; }
+.duel-modes .duel-option strong { font-size: 0.8rem; line-height: 1.25; }
+.duel-modes .duel-option small { display: none; }
+
+/* ---------- HUD ในลาน: สตามินา + ช่องอาวุธ 1/2 + สถานะ ---------- */
+.duel-stam { height: 5px; overflow: hidden; border-radius: 3px; background: #1c1a2e; }
+.duel-stam i { display: block; height: 100%; background: #fee761; transform-origin: left; transition: transform 200ms linear; }
+.duel-side[data-side="1"] .duel-stam i { transform-origin: right; }
+.duel-kit {
+  position: absolute; bottom: 10px; left: 50%; z-index: 4; transform: translateX(-50%);
+  display: grid; gap: 5px; width: min(320px, calc(100% - 24px)); pointer-events: none;
+}
+.duel-kit[hidden] { display: none; }
+.duel-kit-stam { position: relative; height: 10px; overflow: hidden; border-radius: 4px; background: rgb(5 5 15 / 0.8); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.duel-kit-stam i { display: block; height: 100%; background: linear-gradient(#fff3a8 0 50%, #fee761 50%); transform-origin: left; transition: transform 120ms linear; }
+.duel-kit-stam.is-low i { background: linear-gradient(#fdba74 0 50%, #f77622 50%); }
+.duel-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.duel-slot {
+  position: relative; display: flex; align-items: center; gap: 6px; overflow: hidden; padding: 6px 8px;
+  border-radius: 10px; background: rgb(5 5 15 / 0.8); box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--muted); font: 600 0.8rem/1.2 var(--font-ui);
+}
+.duel-slot kbd { min-width: 20px; height: 20px; }
+.duel-slot.is-active { color: var(--text); box-shadow: inset 0 0 0 2px #feae34; }
+.duel-slot .cd { position: absolute; inset: auto 0 0 0; height: 3px; background: #feae34; transform-origin: left; transform: scaleX(0); }
+.duel-status { min-height: 1.2em; color: var(--text); font: 700 0.78rem/1.2 var(--font-ui); text-align: center; text-shadow: 0 1px 0 #181425; }
+.duel-status.is-bad { color: var(--coral); }
+.duel-tip { bottom: 96px; }
+.duel-dmg.is-blocked { color: #c0cbdc; text-shadow: 0 2px 0 #181425, 0 0 6px #0099db; }
+.duel-dmg.is-dodge { color: #4ade80; text-shadow: 0 2px 0 #181425; font-size: 0.9rem; }
+
+/* ---------- เต็มจอ + ล็อกเมาส์ ---------- */
+.game:fullscreen { padding: 8px; background: var(--bg, #0b0b18); }
+.lounge-view.is-locked { cursor: none; }
+.lounge-view.is-locked::after {
+  content: ''; position: absolute; top: 50%; left: 50%; z-index: 4; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgb(5 5 15 / 0.7); pointer-events: none;
+}
+.lock-hint {
+  position: absolute; top: 84px; left: 50%; z-index: 4; transform: translateX(-50%);
+  padding: 5px 12px; border-radius: 10px; background: rgb(5 5 15 / 0.75); color: var(--text);
+  font: 500 0.78rem/1.4 var(--font-ui); pointer-events: none;
+}
+.lock-hint[hidden] { display: none; }
+#fullscreen-btn[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+@media (hover: none), (pointer: coarse) { #fullscreen-btn, #keys-btn { display: none; } }
+
+/* ---------- ตั้งค่าปุ่ม ---------- */
+#keys-panel { bottom: auto; max-height: calc(100% - 20px); }
+.keys-help { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+.keys-rows { display: grid; gap: 4px; overflow-y: auto; overscroll-behavior: contain; margin-right: -6px; padding-right: 6px; }
+.keys-rows h4 { margin: 8px 0 2px; color: var(--muted); font: 600 0.72rem/1 var(--font-ui); letter-spacing: 0.04em; }
+.keys-rows h4:first-child { margin-top: 0; }
+.keys-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; min-height: 40px; font-size: 0.84rem; }
+.keys-cap {
+  min-width: 96px; height: 36px; padding: 0 12px; border-radius: 8px;
+  background: var(--surface-3); color: var(--text); font: 600 0.8rem/1 var(--font-ui);
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.35), 0 0 0 1px var(--line-strong);
+  transition: background-color var(--t-fast) ease-out, box-shadow var(--t-fast) ease-out, transform var(--t-fast) ease-out;
+}
+.keys-cap:hover { background: var(--surface-2); }
+.keys-cap:active { transform: translateY(1px); box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.35), 0 0 0 1px var(--line-strong); }
+.keys-cap.is-waiting { background: var(--amber); color: var(--on-accent); box-shadow: 0 0 0 2px rgb(254 174 52 / 0.45); animation: keys-wait 1s ease-in-out infinite; }
+@keyframes keys-wait { 50% { box-shadow: 0 0 0 5px rgb(254 174 52 / 0.15); } }
+@media (prefers-reduced-motion: reduce) { .keys-cap.is-waiting { animation: none; } }
+.keys-toggle { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 0.84rem; cursor: pointer; }
+.keys-toggle input { width: 18px; height: 18px; accent-color: var(--amber); }
+.keys-note { margin: 0; min-height: 1.2em; color: #fee761; font-size: 0.78rem; }
+.panel-cta.is-quiet { background: var(--surface-2); color: var(--text); }
+.panel-cta.is-quiet:hover { background: var(--surface-3); }

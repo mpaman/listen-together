@@ -1,14 +1,15 @@
 // NPC คู่ซ้อมในลานประลอง: คิดบน server ทุก tick (ใช้กฎเดียวกับคนจริงทุกอย่าง — เก็บอาวุธ ติด cooldown โดนตีเลือดลด)
 // ความยากต่างกันที่ "ความไวในการตอบสนอง / ความแม่นในการเล็ง / โอกาสหลบ / ความเร็ว" ไม่ได้โกงดาเมจ
 // ไม่แตะ socket: คืนเหตุการณ์ให้ index.js กระจาย เหมือน duel.js
-import { attack, createMatch, pickWeapon } from './duel.js';
-import { BODY_RADIUS, clampArena, inPillar, PICK_RANGE, SLAM_DODGE_Y, WEAPONS } from '../public/arena-rules.js';
+import { act, attack, createMatch, swapWeapon } from './duel.js';
+import { BODY_RADIUS, clampArena, cleanLoadout, inPillar, ROLL_DIST, ROLL_MS, SLAM_DODGE_Y, STAMINA, WEAPONS } from '../public/arena-rules.js';
 
+// kits = ชุดอาวุธ (หลัก, รอง) ที่บอทระดับนั้นสุ่มใช้
 export const BOT_LEVELS = {
-  easy: { name: 'NPC มือใหม่', react: 650, aimErr: 0.35, dodge: 0.15, speed: 0.75, prefer: ['sword', 'hammer'] },
-  normal: { name: 'NPC นักสู้', react: 380, aimErr: 0.14, dodge: 0.5, speed: 1, prefer: ['sword', 'spear', 'bow'] },
-  dummy: { name: 'หุ่นซ้อม', react: 1e9, aimErr: 0, dodge: 0, speed: 0, prefer: [] }, // โหมดลองอาวุธ: ยืนนิ่ง ไม่ตีกลับ
-  hard: { name: 'NPC แชมป์', react: 200, aimErr: 0.05, dodge: 0.85, speed: 1.2, prefer: ['spear', 'dagger', 'bow', 'staff'] },
+  easy: { name: 'NPC มือใหม่', react: 650, aimErr: 0.35, dodge: 0.15, speed: 0.75, kits: [['sword', 'bow'], ['hammer', 'staff']] },
+  normal: { name: 'NPC นักสู้', react: 380, aimErr: 0.14, dodge: 0.5, speed: 1, kits: [['sword', 'bow'], ['spear', 'bow'], ['hammer', 'staff'], ['shield', 'bow']] },
+  dummy: { name: 'หุ่นซ้อม', react: 1e9, aimErr: 0, dodge: 0, speed: 0, kits: [['sword', 'bow']] }, // โหมดลองอาวุธ: ยืนนิ่ง ไม่ตีกลับ
+  hard: { name: 'NPC แชมป์', react: 200, aimErr: 0.05, dodge: 0.85, speed: 1.2, kits: [['dagger', 'bow'], ['spear', 'bow'], ['sword', 'staff']] },
 };
 export const isBotId = (id) => typeof id === 'string' && id.startsWith('npc:');
 
@@ -23,7 +24,7 @@ const turnToward = (a, b, k) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a))
 
 // สร้างสมองบอทให้ fighter ที่เป็นบอท (เก็บไว้ใน match.brain)
 export function createBrain(level, rand = Math.random) {
-  return { level, vy: 0, nextThinkAt: 0, strafe: rand() < 0.5 ? 1 : -1, dodgeUntil: 0, dodgeDir: null, nextAttackAt: 0, rand };
+  return { level, vy: 0, nextThinkAt: 0, blockUntil: 0, rollSpeed: 0, strafe: rand() < 0.5 ? 1 : -1, dodgeUntil: 0, dodgeDir: null, nextAttackAt: 0, rand };
 }
 
 // มีเสาบังระหว่างสองจุดไหม (ยิงไปก็ชนเสา)
@@ -94,18 +95,17 @@ function inStrikeRange(kind, me, them, ry) {
   return d <= w.range + BODY_RADIUS * 0.6 && facing > Math.cos(((w.arc / 2) * Math.PI) / 180);
 }
 
-// อาวุธบนพื้นที่บอทอยากได้ (ตามนิสัยแต่ละระดับ ไม่มีก็เอาอันใกล้สุด)
-function wantedWeapon(match, me, prefer) {
-  let best = null;
-  for (const w of match.weapons) {
-    const rank = prefer.includes(w.kind) ? prefer.indexOf(w.kind) : prefer.length + 1;
-    const score = rank * 4 + Math.hypot(w.x - me.x, w.z - me.z);
-    if (!best || score < best.score) best = { w, score };
-  }
-  return best?.w ?? null;
+// ระยะห่างจากคู่ → ควรถืออาวุธไหน (มีทั้งระยะประชิดและยิงไกล: ไกลใช้ยิง ใกล้ใช้ฟัน)
+function wantedSlot(bot, d) {
+  const types = bot.loadout.map((k) => WEAPONS[k].type === 'shot');
+  if (types[0] === types[1]) return bot.slot;
+  const ranged = types.indexOf(true);
+  if (d > 4.5) return ranged;
+  if (d < 3) return 1 - ranged;
+  return bot.slot;
 }
 
-// เดิน 1 tick ของบอท · คืนเหตุการณ์ (swing / state) ให้ index.js กระจาย
+// เดิน 1 tick ของบอท · คืนเหตุการณ์ (swing / state / act) ให้ index.js กระจาย
 export function stepBot(match, botId, now, dt) {
   const bot = match.fighters[botId];
   const brain = match.brain;
@@ -125,33 +125,53 @@ export function stepBot(match, botId, now, dt) {
     return events;
   }
 
+  const dist = Math.hypot(them.x - me.x, them.z - me.z);
+  // ปล่อยการ์ดเมื่อครบเวลา
+  if (bot.blocking && now >= brain.blockUntil) {
+    const res = act(match, botId, 'block', now, false);
+    if (res) events.push({ type: 'act', id: botId, ...res });
+  }
+
   // คิดใหม่ตามรอบความไว (ระดับง่าย = ช้ากว่า → หลบไม่ทัน ตีช้า)
   if (now >= brain.nextThinkAt) {
     brain.nextThinkAt = now + cfg.react * (0.7 + brain.rand() * 0.6);
+    const slot = wantedSlot(bot, dist);
+    if (slot !== bot.slot && swapWeapon(match, botId, slot, now)) events.push({ type: 'state' });
     const danger = threat(match, botId, me, now);
     if (danger && now >= brain.dodgeUntil && brain.rand() < cfg.dodge) {
-      brain.dodgeUntil = now + 450;
-      if ((danger.kind === 'slam' || (danger.kind === 'shot' && danger.arrow)) && brain.rand() < 0.5 && me.y === 0) brain.vy = JUMP; // กระโดดหลบ
-      if (danger.kind === 'shot') brain.dodgeDir = { x: -danger.dir.z * brain.strafe, z: danger.dir.x * brain.strafe }; // เบี่ยงข้าง
-      else brain.dodgeDir = { x: me.x - danger.from.x, z: me.z - danger.from.z }; // ถอยออก
+      const sturdy = WEAPONS[bot.weapon].guard >= 0.6;
+      // อาวุธบล็อกดี + โดนฟันระยะประชิด → ครึ่งหนึ่งยกการ์ดรับ อีกครึ่งกลิ้งหลบ (ให้เดาทางยาก)
+      // ค้อนทุบไม่บล็อก เพราะทะลุครึ่งหนึ่งและกระเด็น
+      if (danger.kind === 'melee' && sturdy && brain.rand() < 0.5) {
+        const res = act(match, botId, 'block', now, true);
+        if (res) events.push({ type: 'act', id: botId, ...res });
+        brain.blockUntil = now + 650;
+      } else {
+        if (danger.kind === 'shot') brain.dodgeDir = { x: -danger.dir.z * brain.strafe, z: danger.dir.x * brain.strafe }; // หลบข้าง
+        else brain.dodgeDir = { x: me.x - danger.from.x, z: me.z - danger.from.z }; // ถอยออก
+        const rolled = bot.stamina >= STAMINA.roll + 10 && act(match, botId, 'roll', now);
+        if (rolled) {
+          events.push({ type: 'act', id: botId, ...rolled });
+          brain.dodgeUntil = now + ROLL_MS;
+          brain.rollSpeed = ROLL_DIST / (ROLL_MS / 1000);
+        } else {
+          brain.dodgeUntil = now + 450;
+          brain.rollSpeed = 0;
+          if ((danger.kind === 'slam' || (danger.kind === 'shot' && danger.arrow)) && me.y === 0) brain.vy = JUMP; // สตามินาไม่พอ → กระโดดแทน
+        }
+      }
     }
     if (brain.rand() < 0.15) brain.strafe *= -1;
   }
 
-  const speed = (bot.weapon === 'fists' ? RUN : WALK + 1) * cfg.speed * WEAPONS[bot.weapon].move;
+  const speed = (WALK + 1) * cfg.speed * WEAPONS[bot.weapon].move * (bot.blocking ? 0.5 : 1);
   if (now < brain.dodgeUntil && brain.dodgeDir) {
-    step(me, brain.dodgeDir.x, brain.dodgeDir.z, RUN * cfg.speed, dt);
-  } else if (bot.weapon === 'fists' && match.weapons.length) {
-    // ยังมือเปล่า → วิ่งไปเก็บอาวุธที่ชอบก่อน
-    const target = wantedWeapon(match, me, cfg.prefer);
-    if (Math.hypot(target.x - me.x, target.z - me.z) <= PICK_RANGE * 0.8) {
-      if (pickWeapon(match, botId, target.id)) events.push({ type: 'state' });
-    } else step(me, target.x - me.x, target.z - me.z, speed, dt);
+    step(me, brain.dodgeDir.x, brain.dodgeDir.z, brain.rollSpeed || RUN * cfg.speed, dt);
   } else {
-    // มีอาวุธแล้ว → รักษาระยะที่ถนัด + เดินวนข้าง (ยิงไกลวนมากกว่า)
+    // รักษาระยะที่ถนัด + เดินวนข้าง (ยิงไกลวนมากกว่า)
     const dx = them.x - me.x;
     const dz = them.z - me.z;
-    const d = Math.hypot(dx, dz) || 1;
+    const d = dist || 1;
     const want = preferredRange(bot.weapon);
     const radial = d > want + 0.3 ? 1 : d < want - 0.6 ? -1 : 0;
     const orbit = WEAPONS[bot.weapon].type === 'shot' ? 0.8 : 0.35;
@@ -160,7 +180,7 @@ export function stepBot(match, botId, now, dt) {
 
   // หันหาคู่ + โจมตีเมื่อเข้าระยะ (เล็งพลาดได้ตามระดับ)
   me.ry = round(wrap(turnToward(me.ry, angleTo(me, them), 0.35)));
-  if (now >= bot.readyAt && now >= brain.nextAttackAt && me.y < SLAM_DODGE_Y && inStrikeRange(bot.weapon, me, them, me.ry)) {
+  if (now >= bot.readyAt && now >= brain.nextAttackAt && !bot.blocking && me.y < SLAM_DODGE_Y && inStrikeRange(bot.weapon, me, them, me.ry)) {
     const aim = angleTo(me, them) + (brain.rand() - 0.5) * 2 * cfg.aimErr;
     const swing = attack(match, botId, aim, now);
     if (swing) events.push({ type: 'swing', id: botId, ...swing });
@@ -171,12 +191,14 @@ export function stepBot(match, botId, now, dt) {
 
 // เริ่มแมตช์ซ้อม คน vs NPC (เฉพาะตอนลานว่าง) · ไม่นับสถิติชนะ
 // level 'dummy' = โหมดลองอาวุธ (หุ่นไม่ตอบโต้ ไม่จับเวลา เลือดหมดฟื้นใหม่ · ออกเองด้วย duel:quit)
-export function startBotMatch(arena, id, name, level, now, look, rand = Math.random) {
+export function startBotMatch(arena, id, name, level, now, look, rand = Math.random, loadout = undefined) {
   if (arena.match) return { error: 'ลานไม่ว่าง มีคนประลองอยู่' };
   if (!BOT_LEVELS[level]) return { error: 'ไม่มีโหมดนี้' };
   arena.queue = arena.queue.filter((q) => q.id !== id); // ออกจากคิวหาคู่ก่อน
   const botId = `npc:${arena.seq + 1}`;
-  const match = createMatch(arena, [{ id, name }, { id: botId, name: BOT_LEVELS[level].name, look }], now, { brain: createBrain(level, rand), botId, ...(level === 'dummy' ? { practice: true } : {}) });
+  const kits = BOT_LEVELS[level].kits;
+  const botKit = kits[Math.floor(rand() * kits.length)];
+  const match = createMatch(arena, [{ id, name, loadout: cleanLoadout(loadout) }, { id: botId, name: BOT_LEVELS[level].name, look, loadout: botKit }], now, { brain: createBrain(level, rand), botId, ...(level === 'dummy' ? { practice: true } : {}) });
   return { match };
 }
 

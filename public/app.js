@@ -182,9 +182,10 @@ function renderDuelButton(waiting = duelWaiting, busy = duelBusy) {
   if (!sub) return;
   $('duel-queue-label').textContent = others > 0 && !busy ? `รับคำท้า (${others} คนรอ)` : busy ? 'ต่อคิวรอแมตช์ถัดไป' : 'หาคู่ (คนจริง)';
   sub.textContent = busy ? 'มีคนประลองอยู่ จะได้ลงสนามแมตช์ถัดไป' : others > 0 ? `${waiting.join(', ')} รออยู่ กดแล้วเข้าลานเลย` : 'รอเพื่อนในห้องกดประลองด้วย แล้วเข้าลาน 1v1';
+  sub.closest('button').title = sub.textContent;
   for (const opt of document.querySelectorAll('#duel-panel [data-duel="npc"], #duel-panel [data-duel="dummy"]')) {
     opt.disabled = busy;
-    opt.title = busy ? 'ลานไม่ว่าง รอคนที่ประลองอยู่จบก่อน' : '';
+    opt.title = busy ? 'ลานไม่ว่าง รอคนที่ประลองอยู่จบก่อน' : opt.querySelector('small').textContent; // ปุ่มย่อ: คำอธิบายอยู่ใน tooltip
   }
 }
 // ปุ่มประลอง: ในลาน = ออก · รอคิวอยู่ = ยกเลิก · นอกนั้น = เปิดเมนู (หาคู่ / NPC / ลองอาวุธ)
@@ -199,7 +200,8 @@ function onDuelButton() {
   panels.open('duel');
 }
 function joinDuelQueue() {
-  socket.emit('duel:join', null, (res) => {
+  // ส่งอาวุธหลัก/รองที่เลือกในเมนูไปด้วย (server เช็คซ้ำ ผิดรูป = ใช้ชุดเริ่มต้น)
+  socket.emit('duel:join', { loadout: panels.loadout() }, (res) => {
     if (res?.error) return ui.toast(res.error);
     duelQueued = Boolean(res?.queued);
     renderDuelButton();
@@ -209,7 +211,7 @@ function joinDuelQueue() {
 function onDuelMenu(kind) {
   panels.close();
   if (kind === 'queue') return joinDuelQueue();
-  socket.emit('duel:npc', { level: kind === 'dummy' ? 'dummy' : 'normal' }, (res) => res?.error && ui.toast(res.error));
+  socket.emit('duel:npc', { level: kind === 'dummy' ? 'dummy' : 'normal', loadout: panels.loadout() }, (res) => res?.error && ui.toast(res.error));
 }
 socket.on('duel:queue', (names) => {
   const before = duelWaiting.length;
@@ -232,6 +234,9 @@ socket.on('duel:shot', (ev) => lounge?.duel.shot(ev));
 socket.on('duel:shotEnd', (ev) => lounge?.duel.shotEnd(ev));
 socket.on('duel:hit', (ev) => lounge?.duel.hit(ev));
 socket.on('duel:end', (ev) => lounge?.duel.end(ev));
+socket.on('duel:act', (ev) => lounge?.duel.act(ev));
+socket.on('duel:stamina', (values) => lounge?.duel.stamina(values));
+socket.on('duel:dodge', (ev) => lounge?.duel.dodge(ev));
 socket.on('duel:close', () => {
   lounge?.duel.close();
   renderDuelButton(duelWaiting, false);
@@ -472,7 +477,8 @@ async function initLounge() {
       onScreenQuad: onStageQuad,
       onDuelPose: (pose) => joined && socket.emit('duel:pose', pose),
       onDuelAttack: (aim) => joined && socket.emit('duel:attack', aim),
-      onDuelPick: (id) => joined && socket.emit('duel:pick', id),
+      onDuelSwap: (slot) => joined && socket.emit('duel:swap', slot),
+      onDuelAct: (act) => joined && socket.emit('duel:act', act),
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {
@@ -486,6 +492,9 @@ async function initLounge() {
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
   document.querySelector('.lounge-actions [data-act="drop"]').addEventListener('click', () => lounge.dropHeld());
   document.querySelector('.lounge-actions [data-act="duel"]').addEventListener('click', onDuelButton);
+  // ปุ่มเต็มจอ (คอม): ทั้งหน้าลานเล่นเต็มจอ · อยู่ในลานประลองด้วย = ล็อกเมาส์ให้เลย
+  $('fullscreen-btn').addEventListener('click', () => lounge?.toggleFullscreen());
+  document.addEventListener('fullscreenchange', () => $('fullscreen-btn').setAttribute('aria-pressed', String(Boolean(document.fullscreenElement))));
   for (const opt of document.querySelectorAll('#duel-panel [data-duel]')) opt.addEventListener('click', () => onDuelMenu(opt.dataset.duel));
   renderDuelButton();
   for (const btn of document.querySelectorAll('.lounge-zoom [data-zoom]')) {
