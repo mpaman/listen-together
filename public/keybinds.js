@@ -16,6 +16,7 @@ export const KEY_ACTIONS = [
   { id: 'block', label: 'บล็อก (กดค้าง)', group: 'ต่อสู้', def: 'KeyX' },
   { id: 'roll', label: 'กลิ้งหลบ', group: 'ต่อสู้', def: 'ShiftLeft' },
   { id: 'lockon', label: 'ล็อกเป้า (กดเปิด/ปิด)', group: 'ต่อสู้', def: 'Tab' },
+  { id: 'heal', label: 'ดื่มยาเติมเลือด', group: 'ต่อสู้', def: 'KeyE' },
   { id: 'swap', label: 'สลับอาวุธ', group: 'ต่อสู้', def: 'KeyQ' },
   { id: 'slot1', label: 'อาวุธหลัก', group: 'ต่อสู้', def: 'Digit1' },
   { id: 'slot2', label: 'อาวุธรอง', group: 'ต่อสู้', def: 'Digit2' },

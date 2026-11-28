@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   act, attack, createArena, forfeit, joinQueue, leaveQueue, meleeHits, publicMatch,
-  matchOf, MAX_MATCHES, queueNames, setPose, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
+  matchOf, MAX_MATCHES, queueNames, setPose, setPracticeWeapon, shotHits, slamHits, stepDuel, swapWeapon, winsOf,
 } from '../server/duel.js';
 import {
-  cleanLoadout, COUNTDOWN_MS, DEFAULT_LOADOUT, FIGHT_MS, HP_MAX, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHIELD, STAMINA, SWAP_MS, WEAPONS,
+  cleanLoadout, COUNTDOWN_MS, DEFAULT_LOADOUT, FIGHT_MS, HP_MAX, POTION, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHIELD, STAMINA, SWAP_MS, WEAPONS,
 } from '../public/arena-rules.js';
 
 // เริ่มแมตช์ A vs B แล้วข้ามนับถอยหลังให้เข้าช่วงสู้เลย
@@ -343,4 +343,60 @@ test('หลุดตอนอยู่ในคิว = แค่ออกจ�
   joinQueue(arena, 'a', 'A', 0);
   assert.deepEqual(forfeit(arena, 'a', 1), []);
   assert.deepEqual(queueNames(arena), []);
+});
+
+test('ยาเติมเลือด: แมตช์ละ 2 ขวด · เลือดเข้าตอนดื่มเสร็จ · ระหว่างดื่มตี/กลิ้งไม่ได้ · เลือดเต็มดื่มไม่ได้', () => {
+  const { arena, match, t } = fighting();
+  const a = match.fighters.a;
+  assert.equal(a.potions, POTION.count);
+  assert.equal(act(match, 'a', 'heal', t), null); // เลือดเต็ม
+  a.hp = 30;
+  const res = act(match, 'a', 'heal', t);
+  assert.deepEqual(res, { act: 'heal', ms: POTION.ms, potions: POTION.count - 1 });
+  assert.equal(attack(match, 'a', 0, t + 100), null);
+  assert.equal(act(match, 'a', 'roll', t + 100), null);
+  assert.equal(act(match, 'a', 'heal', t + 100), null); // ดื่มซ้อนไม่ได้
+  stepDuel(arena, t + POTION.ms - 50);
+  assert.equal(a.hp, 30); // ยังไม่เสร็จ
+  const events = stepDuel(arena, t + POTION.ms);
+  assert.equal(a.hp, 30 + POTION.heal);
+  assert.ok(events.some((e) => e.type === 'healed' && e.id === 'a' && e.gain === POTION.heal));
+  assert.ok(attack(match, 'a', 0, t + POTION.ms + 1)); // ดื่มเสร็จตีได้
+  // ขวดที่ 2 แล้วหมด
+  a.hp = 10;
+  const t2 = t + 5000;
+  assert.ok(act(match, 'a', 'heal', t2));
+  stepDuel(arena, t2 + POTION.ms);
+  a.hp = 10;
+  assert.equal(act(match, 'a', 'heal', t2 + POTION.ms + 10), null);
+  assert.equal(publicMatch(match, t2).fighters[0].potions, 0);
+});
+
+test('เลือดเติมไม่เกินเต็ม', () => {
+  const { arena, match, t } = fighting();
+  match.fighters.a.hp = HP_MAX - 5;
+  act(match, 'a', 'heal', t);
+  stepDuel(arena, t + POTION.ms);
+  assert.equal(match.fighters.a.hp, HP_MAX);
+});
+
+test('เปลี่ยนอาวุธได้เฉพาะโหมดลองอาวุธ · ชิ้นไหนก็ได้ · ซ้ำกับอีกช่อง = สลับช่อง', () => {
+  const { match, t } = fighting();
+  match.fighters.a.loadout = ['sword', 'bow'];
+  assert.equal(setPracticeWeapon(match, 'a', 'hammer', t), null); // แมตช์จริงไม่ได้
+  match.practice = true;
+  assert.equal(setPracticeWeapon(match, 'a', 'nope', t), null);
+  assert.deepEqual(setPracticeWeapon(match, 'a', 'hammer', t), { weapon: 'hammer', slot: 0 });
+  assert.deepEqual(match.fighters.a.loadout, ['hammer', 'bow']);
+  assert.equal(match.fighters.a.weapon, 'hammer');
+  assert.equal(attack(match, 'a', 0, t + 10), null); // รอ SWAP_MS ก่อนตี
+  setPracticeWeapon(match, 'a', 'bow', t + 1000);
+  assert.deepEqual(match.fighters.a.loadout, ['bow', 'hammer']);
+});
+
+test('โหมดลองอาวุธ ยาไม่ลด', () => {
+  const { match, t } = fighting();
+  match.practice = true;
+  match.fighters.a.hp = 50;
+  assert.equal(act(match, 'a', 'heal', t).potions, POTION.count);
 });

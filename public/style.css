@@ -1360,7 +1360,7 @@ body.is-playing .stage[data-view='cover'] .cover-art { animation: cover-breathe 
 @keyframes duel-pop { from { opacity: 0; transform: translate(-50%, -50%) scale(0.85); } }
 @keyframes duel-call { 50% { box-shadow: 0 0 0 4px rgb(254 174 52 / 0.35); } }
 @media (prefers-reduced-motion: reduce) {
-  .duel-banner, .act[data-act="duel"].is-callout { animation: none; }
+  .duel-banner, .act[data-act="duel"].is-callout, .duel-vignette.is-critical { animation: none; }
   .duel-bar i { transition: none; }
 }
 
@@ -1532,6 +1532,41 @@ kbd {
 .duel-tip { bottom: 96px; }
 .duel-dmg.is-blocked { color: #c0cbdc; text-shadow: 0 2px 0 #181425, 0 0 6px #0099db; }
 .duel-dmg.is-dodge { color: #4ade80; text-shadow: 0 2px 0 #181425; font-size: 0.9rem; }
+.duel-dmg.is-heal { color: #4ade80; text-shadow: 0 2px 0 #181425, 0 0 6px #14532d; }
+
+/* ยาเติมเลือด: ช่องเล็กต่อท้ายช่องอาวุธ · หมดขวด = จางลง (มีตัวเลขบอก ไม่ใช้สีอย่างเดียว) */
+.duel-slots:has(.duel-potion) { grid-template-columns: 1fr 1fr auto; }
+.duel-potion {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 10px;
+  background: rgb(5 5 15 / 0.8); box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: #4ade80; font: 700 0.8rem/1.2 var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.duel-potion kbd { min-width: 20px; height: 20px; }
+.duel-potion.is-empty { color: var(--muted); opacity: 0.6; }
+.duel-potion.is-active { box-shadow: inset 0 0 0 2px #4ade80; }
+
+/* โหมดลองอาวุธ: ปุ่มเปลี่ยนอาวุธในมือ (ปุ่มกดได้ แม้กล่อง kit จะไม่รับคลิก) */
+.duel-practice { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; pointer-events: auto; }
+.duel-practice[hidden] { display: none; }
+.duel-pick {
+  min-height: 32px; padding: 4px 10px; border: 0; border-radius: 8px; background: rgb(5 5 15 / 0.85);
+  box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--muted); font: 600 0.78rem/1.2 var(--font-ui); cursor: pointer;
+  transition: color var(--t-fast, 120ms) ease, box-shadow var(--t-fast, 120ms) ease;
+}
+.duel-pick:hover { color: var(--text); box-shadow: inset 0 0 0 1px #feae34; }
+.duel-pick:focus-visible { outline: 2px solid #feae34; outline-offset: 2px; }
+.duel-pick.is-active { color: var(--text); box-shadow: inset 0 0 0 2px #feae34; }
+
+/* เลือดใกล้หมด: ขอบจอแดง (ความเข้มตั้งจาก JS) · วิกฤต = เต้นตามจังหวะหัวใจ */
+.duel-vignette {
+  position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 52%, rgb(228 59 68 / 0.28) 74%, rgb(160 20 40 / 0.72) 100%);
+  box-shadow: inset 0 0 60px rgb(228 59 68 / 0.55);
+  transition: opacity 320ms ease-out;
+}
+.duel-vignette.is-critical { animation: duel-heartbeat 0.9s ease-in-out infinite; }
+@keyframes duel-heartbeat { 0%, 100% { filter: brightness(1); } 15% { filter: brightness(1.6); } 30% { filter: brightness(1); } 45% { filter: brightness(1.35); } }
+.duel-banner.is-finish { color: #feae34; font-size: clamp(2.2rem, 7vw, 4rem); letter-spacing: 0.06em; box-shadow: 0 0 0 2px #e43b44; }
 
 /* ---------- เต็มจอ + ล็อกเมาส์ ---------- */
 .game:fullscreen { padding: 8px; background: var(--bg, #0b0b18); }

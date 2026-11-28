@@ -242,6 +242,7 @@ socket.on('duel:end', (ev) => {
 socket.on('duel:act', (ev) => lounge?.duel.act(ev));
 socket.on('duel:stamina', (values) => lounge?.duel.stamina(values));
 socket.on('duel:dodge', (ev) => lounge?.duel.dodge(ev));
+socket.on('duel:healed', (ev) => lounge?.duel.healed(ev));
 socket.on('duel:close', (ev) => {
   lounge?.duel.close(ev ?? {});
   renderDuelButton(duelWaiting, false);
@@ -484,6 +485,7 @@ async function initLounge() {
       onDuelAttack: (aim) => joined && socket.emit('duel:attack', aim),
       onDuelSwap: (slot) => joined && socket.emit('duel:swap', slot),
       onDuelAct: (act) => joined && socket.emit('duel:act', act),
+      onDuelPracticeWeapon: (pick) => joined && socket.emit('duel:practiceWeapon', pick),
     });
     if (new URLSearchParams(location.search).has('debug')) window.__lounge = lounge;
   } catch (err) {

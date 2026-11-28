@@ -7,8 +7,8 @@
 import * as THREE from 'three';
 import { buildItem, animateItem } from './lounge-items.js';
 import {
-  ARENA_HALF, BLOCK_MOVE, BODY_RADIUS, clampArena, DASH_DIST, DASH_ENABLED, DASH_MS, HP_MAX, inPillar, PILLARS, ROLL_DIST, ROLL_MS,
-  STAMINA, SWAP_MS, WEAPONS,
+  ARENA_HALF, BLOCK_MOVE, BODY_RADIUS, clampArena, DASH_DIST, DASH_ENABLED, DASH_MS, HP_MAX, inPillar, PILLARS, POTION, RESULT_MS,
+  ROLL_DIST, ROLL_MS, STAMINA, SWAP_MS, WEAPON_KINDS, WEAPONS,
 } from './arena-rules.js';
 import { labelOf, mouseSwapped } from './keybinds.js';
 
@@ -22,6 +22,12 @@ export const ARENA_SPEED = 4.2; // ในลานไม่มีวิ่ง �
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 // ท่าตีทุกแบบ (ใช้กันท่าสะดุ้งมาทับกลางท่า)
 const ATTACK_ANIMS = new Set(['jab', 'slash', 'stab', 'slam', 'shoot', 'cast']);
+// ขอบจอแดงเมื่อเลือดเราเหลือไม่ถึงเท่านี้ (สัดส่วนของเลือดเต็ม) · ต่ำกว่า CRITICAL = แดงเต้นเป็นจังหวะ
+const LOW_HP = 0.35;
+const CRITICAL_HP = 0.15;
+// ท่าปิดเกม (น็อกเท่านั้น): ผู้ชนะพุ่งไปยืนข้างผู้แพ้ → กระโดดทุบ → ผู้แพ้ล้ม → ค่อยขึ้นป้ายผล
+// ทั้งสองเครื่องเล่นเองจาก duel:end (ไม่ต้องรอ server ส่งตำแหน่ง) จึงเห็นเหมือนกันทั้งสองฝั่ง
+const FINISH = { gap: 1.1, approachMin: 220, approachMax: 520, sec: 1.5, hitAt: 0.62, bannerAfter: 750 };
 
 const toWorld = (x, z) => ({ x: x + ARENA_ORIGIN.x, z: z + ARENA_ORIGIN.z });
 const toLocal = (x, z) => ({ x: x - ARENA_ORIGIN.x, z: z - ARENA_ORIGIN.z });
@@ -124,7 +130,15 @@ function buildHud(container) {
     <div class="duel-slots">
       <div class="duel-slot" data-slot="0"><kbd>1</kbd><span></span><i class="cd"></i></div>
       <div class="duel-slot" data-slot="1"><kbd>2</kbd><span></span><i class="cd"></i></div>
+      <div class="duel-potion"><kbd>E</kbd><span></span></div>
+    </div>
+    <div class="duel-practice" role="group" aria-label="เปลี่ยนอาวุธในมือ (โหมดลองอาวุธ)" hidden>
+      ${WEAPON_KINDS.map((kind) => `<button type="button" class="duel-pick" data-kind="${kind}">${WEAPONS[kind].name}</button>`).join('')}
     </div>`;
+  // ขอบจอแดงตอนเลือดใกล้หมด (อยู่ใต้แถบเลือด/ป้าย · ไม่รับคลิก)
+  const vignette = document.createElement('div');
+  vignette.className = 'duel-vignette';
+  vignette.setAttribute('aria-hidden', 'true');
   const lockHint = document.createElement('div');
   lockHint.className = 'lock-hint';
   lockHint.hidden = true;
@@ -136,10 +150,12 @@ function buildHud(container) {
   const tip = document.createElement('div');
   tip.className = 'duel-tip';
   tip.hidden = true;
-  container.append(hud, banner, tip, kit, lockHint);
+  container.append(vignette, hud, banner, tip, kit, lockHint);
   const sides = [...hud.querySelectorAll('.duel-side')];
   return {
-    hud, banner, tip, sides, kit, lockHint, renderLockHint,
+    hud, banner, tip, sides, kit, lockHint, renderLockHint, vignette,
+    potion: kit.querySelector('.duel-potion'),
+    practice: kit.querySelector('.duel-practice'),
     clock: hud.querySelector('.duel-clock'),
     status: kit.querySelector('.duel-status'),
     stam: kit.querySelector('.duel-kit-stam'),
@@ -171,6 +187,17 @@ export function createDuel(ctx) {
   let lockRing = null; // วงแดงใต้เท้าเป้า (สร้างตอนล็อกครั้งแรก)
   let tipTimer = null;
   let bannerTimer = null;
+  let drinkUntil = 0; // กำลังดื่มยาถึงเมื่อไหร่ (เดินช้า ตี/กลิ้ง/บล็อกไม่ได้)
+  let pendingDrink = false; // ส่งดื่มยาไปแล้ว รอ server ยืนยัน (ปฏิเสธ = คืนขวด หยุดท่า)
+  let finish = null; // ท่าปิดเกมที่กำลังเล่น { winId, loseId, start, swingAt, impactAt, bannerAt, ... }
+
+  // ปุ่มเลือกอาวุธตอนซ้อม: คลิกแล้วปล่อยโฟกัสทันที (ไม่งั้น Space/Enter ไปกดปุ่มซ้ำแทนกระโดด/เต็มจอ)
+  ui.practice.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-kind]');
+    if (!btn) return;
+    btn.blur();
+    practicePick(btn.dataset.kind);
+  });
 
   const fighterIds = () => (match ? match.fighters.map((f) => f.id) : []);
   const opponentId = () => fighterIds().find((id) => id !== ctx.myId());
@@ -251,6 +278,8 @@ export function createDuel(ctx) {
     blockHeld = false;
     stunUntil = 0;
     busyUntil = 0;
+    drinkUntil = 0;
+    pendingDrink = false;
     motion = null;
     setLockOn(false);
     ctx.me()?.av.setGuard(false);
@@ -369,8 +398,8 @@ export function createDuel(ctx) {
     enter();
     showBanner('READY?', 900);
     ctx.notice(next.practice
-      ? `โหมดลองอาวุธ: ตีหุ่นได้เลย · ${labelOf('swap')}/${labelOf('slot1')}/${labelOf('slot2')} สลับอาวุธ · ไม่จับเวลา · กด "ออกจากลาน" เมื่อพอ`
-      : controlsHint());
+      ? `โหมดลองอาวุธ: ตีหุ่นได้เลย · กดปุ่มอาวุธด้านล่างเพื่อเปลี่ยนเป็นชิ้นไหนก็ได้ (ล็อกเมาส์อยู่ กด Esc ก่อน) · ${labelOf('heal')} ดื่มยา (ซ้อมไม่เสียขวด) · ไม่จับเวลา`
+      : `${controlsHint()} · ${labelOf('heal')} ดื่มยา (${POTION.count} ขวด)`);
     weaponTip(myFighter()?.weapon);
   }
   // เข้าห้องตอนมีคนสู้อยู่: จำไว้เฉยๆ ไม่เด้งข้อความ
@@ -424,17 +453,46 @@ export function createDuel(ctx) {
     if (!inArena) return;
     if (ev.id === ctx.myId()) {
       if (Number.isFinite(ev.stamina)) setMyStamina(ev.stamina);
-      if (ev.act === 'denied') motion = null; // สตามินาฝั่ง server ไม่พอ → หยุดพุ่ง
+      if (ev.act === 'denied') {
+        motion = null; // สตามินาฝั่ง server ไม่พอ → หยุดพุ่ง
+        if (pendingDrink) cancelDrink();
+      }
       if (ev.act === 'block' && ev.on !== blocking) setBlocking(ev.on);
+      if (ev.act === 'heal') {
+        pendingDrink = false;
+        const f = myFighter();
+        if (f && Number.isFinite(ev.potions)) f.potions = ev.potions;
+        renderHud();
+      }
       return;
     }
     const entry = ctx.avatars.get(ev.id);
     if (!entry) return;
-    if (ev.act === 'block') entry.av.setGuard(ev.on);
+    if (ev.act === 'heal') {
+      entry.av.setGuard(false);
+      entry.av.play('drink', { sec: (ev.ms ?? POTION.ms) / 1000 });
+    } else if (ev.act === 'block') entry.av.setGuard(ev.on);
     else if (ev.act === 'roll' || ev.act === 'dash') {
       entry.av.setGuard(false);
       entry.av.play(ev.act, { sec: ev.ms / 1000 + (ev.act === 'dash' ? 0.08 : 0) });
     }
+  }
+
+  // ดื่มยาเสร็จ (server): เลือดเข้า + ตัวเลขเขียวลอย + ประกายเขียว
+  function healed(ev) {
+    const f = match?.fighters.find((x) => x.id === ev.id);
+    if (!f) return;
+    f.hp = ev.hp;
+    if (Number.isFinite(ev.potions)) f.potions = ev.potions;
+    if (ev.id === ctx.myId()) {
+      pendingDrink = false;
+      drinkUntil = 0;
+    }
+    renderHud();
+    const entry = inArena && ctx.avatars.get(ev.id);
+    if (!entry) return;
+    floatText(entry, `+${ev.gain}`, 'is-heal');
+    fx.puff(entry.pos.x, entry.viewY + 1, entry.pos.z, { n: 10, spread: 1.6, up: 2, hex: 0x4ade80 });
   }
 
   function updateStamina(values) {
@@ -549,14 +607,17 @@ export function createDuel(ctx) {
     }
     match.phase = 'over';
     match.winner = ev.winner;
-    phaseEndsAt = performance.now() + 4000;
+    phaseEndsAt = performance.now() + RESULT_MS;
     const wins = Object.entries(ev.wins ?? {}).map(([name, n]) => `${name} ${n}`).join(' · ');
     setLockOn(false);
     if (inArena) {
       // ป้ายผลกลางจอใช้ภาษาอังกฤษแบบเกมต่อสู้ (Man ขอ) · ข้อความแจ้งในแชทยังเป็นไทย
       const whyEn = { ko: 'K.O.!', time: 'TIME UP', left: 'OPPONENT LEFT' }[ev.reason] ?? '';
       const text = ev.winner === null ? 'DRAW' : ev.winnerId === ctx.myId() ? 'YOU WIN! 🏆' : 'YOU LOSE';
-      showBanner(`${text}\n${whyEn}${wins ? `\nWINS: ${wins}` : ''}`, 0, ev.winnerId === ctx.myId() ? 'is-win' : 'is-lose');
+      const result = () => showBanner(`${text}\n${whyEn}${wins ? `\nWINS: ${wins}` : ''}`, 0, ev.winnerId === ctx.myId() ? 'is-win' : 'is-lose');
+      // น็อก = เล่นท่าปิดเกมก่อน แล้วค่อยขึ้นป้ายผล · หมดเวลา/อีกฝ่ายออก = ขึ้นป้ายเลย
+      const loseId = fighterIds().find((id) => id !== ev.winnerId);
+      if (!(ev.reason === 'ko' && ev.winnerId && startFinisher(ev.winnerId, loseId, result))) result();
     } else {
       ctx.notice(ev.winner ? `🏆 ${ev.winner} ชนะการประลอง (${why})` : `การประลองจบลงด้วยผลเสมอ`);
     }
@@ -570,12 +631,15 @@ export function createDuel(ctx) {
       active.delete(ev.matchId);
       if (ev.matchId !== match?.id) return; // แมตช์คนอื่นปิด → แค่เลิกซ่อนตัวเขา
     }
+    for (const f of match?.fighters ?? []) ctx.avatars.get(f.id)?.av.stop(); // ล้มน็อกค้างอยู่ → ลุกก่อนกลับลานฟังเพลง
+    finish = null;
     leave();
     for (const f of match?.fighters ?? []) {
       if (f.npc) ctx.removeAvatar(f.id);
       const e = ctx.avatars.get(f.id);
       if (e) delete e.loungeHeld;
     }
+    renderVignette(null);
     match = null;
     ui.hud.hidden = true;
     ui.banner.hidden = true;
@@ -670,6 +734,128 @@ export function createDuel(ctx) {
     }
   }
 
+  // ดื่มยา: ขวดลดทันทีในเครื่อง (ซ้อม = ไม่ลด) · ระหว่างดื่มเดินช้า ตี/กลิ้ง/บล็อก/สลับอาวุธไม่ได้ (busyUntil)
+  // เลือดเข้าตอนดื่มเสร็จ (server ส่ง duel:healed) · เลือดเต็ม/ยาหมด = บอกแล้วไม่ทำ (กันกดพลาดเสียขวด)
+  function drink() {
+    const entry = ctx.me();
+    const f = myFighter();
+    const now = performance.now();
+    if (!entry || !f || !canAct(now)) return;
+    if (!(f.potions > 0)) return flashStatus('ยาหมดแล้ว');
+    if (f.hp >= HP_MAX) return flashStatus('เลือดเต็มอยู่แล้ว');
+    if (blocking) setBlocking(false);
+    drinkUntil = now + POTION.ms;
+    busyUntil = Math.max(busyUntil, drinkUntil);
+    pendingDrink = true;
+    if (!match.practice) f.potions -= 1;
+    entry.av.play('drink', { sec: POTION.ms / 1000 });
+    renderHud();
+    ctx.send.act('heal');
+  }
+  // server ไม่ให้ดื่ม (จังหวะในเครื่องกับ server ต่างกันนิดนึง) → คืนขวด หยุดท่า ขยับได้ทันที
+  function cancelDrink() {
+    pendingDrink = false;
+    const f = myFighter();
+    if (f && !match.practice) f.potions += 1;
+    if (drinkUntil > performance.now()) {
+      busyUntil = drinkUntil = 0;
+      ctx.me()?.av.stop();
+      flashStatus('ดื่มยาไม่ได้ตอนนี้');
+    }
+    renderHud();
+  }
+
+  // โหมดลองอาวุธ: เปลี่ยนอาวุธในมือเป็นชิ้นไหนก็ได้ · ทำแบบเดียวกับ server ในเครื่องก่อน (ตอบสนองทันที) แล้ว duel:state มายืนยัน
+  function practicePick(kind) {
+    const f = myFighter();
+    const now = performance.now();
+    if (!match?.practice || !inArena || match.phase !== 'fight' || !f?.loadout || !WEAPONS[kind]) return;
+    if (!canAct(now)) return flashStatus('รอจบท่าก่อน');
+    if (f.weapon === kind) return weaponTip(kind);
+    const other = 1 - f.slot;
+    if (f.loadout[other] === kind) f.loadout = f.slot === 0 ? [kind, f.loadout[0]] : [f.loadout[1], kind];
+    else f.loadout = f.loadout.map((k, i) => (i === f.slot ? kind : k));
+    f.weapon = kind;
+    if (readyAt < now + SWAP_MS) {
+      readyFrom = now;
+      readyAt = now + SWAP_MS;
+    }
+    if (blocking) setBlocking(false);
+    syncHeld();
+    renderHud();
+    weaponTip(kind);
+    ctx.send.practiceWeapon(kind);
+  }
+
+  // ท่าปิดเกม: คืน false = เล่นไม่ได้ (ไม่มีตัวใดตัวหนึ่ง) ให้ขึ้นป้ายผลเลย
+  function startFinisher(winId, loseId, showResult) {
+    const win = ctx.avatars.get(winId);
+    const lose = ctx.avatars.get(loseId);
+    if (!win || !lose) return false;
+    const dx = win.pos.x - lose.pos.x;
+    const dz = win.pos.z - lose.pos.z;
+    const d = Math.hypot(dx, dz) || 1;
+    // จุดยืนข้างผู้แพ้ ฝั่งเดียวกับที่ผู้ชนะยืนอยู่ (ไม่ต้องเดินอ้อม) · ไกลมาก (ธนู) ก็พุ่งไปเร็วขึ้น ไม่ช้าลง
+    const tx = lose.pos.x + (dx / d) * FINISH.gap;
+    const tz = lose.pos.z + (dz / d) * FINISH.gap;
+    const ry = Math.atan2(lose.pos.x - tx, lose.pos.z - tz);
+    const approach = Math.min(FINISH.approachMax, Math.max(FINISH.approachMin, Math.abs(d - FINISH.gap) * 60));
+    const now = performance.now();
+    const me = ctx.myId();
+    if (winId === me) {
+      const s = approach / 1000;
+      motion = { vx: (tx - win.pos.x) / s, vz: (tz - win.pos.z) / s, until: now + approach };
+      face = { ry, until: now + RESULT_MS };
+    } else win.target = { x: tx, y: 0, z: tz, ry };
+    // ผู้แพ้หันมาหาผู้ชนะ (ตัวเราเองหันด้วย face · ตัวอื่นหันผ่าน target)
+    const loseRy = Math.atan2(tx - lose.pos.x, tz - lose.pos.z);
+    if (loseId === me) face = { ry: loseRy, until: now + RESULT_MS };
+    else lose.target = { x: lose.pos.x, y: lose.pos.y, z: lose.pos.z, ry: loseRy };
+    win.av.setGuard(false);
+    lose.av.setGuard(false);
+    const swingAt = now + approach;
+    const impactAt = swingAt + FINISH.sec * FINISH.hitAt * 1000;
+    finish = { winId, loseId, swingAt, impactAt, bannerAt: impactAt + FINISH.bannerAfter, showResult, swung: false, hit: false, shown: false };
+    return true;
+  }
+  function tickFinisher(now) {
+    if (!finish) return;
+    const win = ctx.avatars.get(finish.winId);
+    const lose = ctx.avatars.get(finish.loseId);
+    if (!finish.swung && now >= finish.swingAt) {
+      finish.swung = true;
+      win?.av.play('finisher', { sec: FINISH.sec, hitAt: FINISH.sec * FINISH.hitAt });
+    }
+    if (!finish.hit && now >= finish.impactAt) {
+      finish.hit = true;
+      if (lose) {
+        lose.av.flash();
+        lose.av.play('ko', { hold: true });
+        fx.puff(lose.pos.x, lose.viewY + 0.4, lose.pos.z, { n: 26, spread: 4, up: 2.4, hex: 0xfeae34 });
+        fx.puff(lose.pos.x, lose.viewY + 0.1, lose.pos.z, { n: 14, spread: 3, up: 0.8, hex: 0xc0cbdc });
+      }
+      if (!reducedMotion.matches) ctx.shake(0.45);
+      showBanner('FINISH!', FINISH.bannerAfter, 'is-finish');
+    }
+    if (!finish.shown && now >= finish.bannerAt) {
+      finish.shown = true;
+      finish.showResult();
+    }
+  }
+  // กล้องระหว่างท่าปิดเกม: มองกึ่งกลางสองคน · axis = ทิศเส้นที่ลากระหว่างสองคน (lounge.js หมุนกล้องไปด้านข้างเส้นนี้)
+  function cinematic() {
+    if (!finish || !inArena) return null;
+    const a = ctx.avatars.get(finish.winId);
+    const b = ctx.avatars.get(finish.loseId);
+    if (!a || !b) return null;
+    return {
+      x: (a.pos.x + b.pos.x) / 2,
+      y: Math.min(a.viewY, b.viewY),
+      z: (a.pos.z + b.pos.z) / 2,
+      axis: Math.atan2(a.pos.x - b.pos.x, a.pos.z - b.pos.z),
+    };
+  }
+
   // ปุ่มคีย์บอร์ดในลาน · action = ชื่อท่าจาก keybinds.js (lounge.js แปลงจากปุ่มที่ผู้เล่นตั้งไว้)
   // คืน true = ลานจัดการแล้ว (lounge.js ไม่ต้องทำต่อ) · เดิน/กระโดด คืน false ให้ lounge.js ทำตามปกติ
   function key(action, down, repeat) {
@@ -690,6 +876,9 @@ export function createDuel(ctx) {
         return true;
       case 'swap':
         if (press) swapTo();
+        return true;
+      case 'heal':
+        if (press) drink();
         return true;
       case 'lockon':
         if (press) toggleLockOn();
@@ -745,9 +934,12 @@ export function createDuel(ctx) {
       const bar = side.querySelector('.duel-bar i');
       bar.style.transform = `scaleX(${pct})`;
       side.classList.toggle('is-low', pct <= 0.3);
-      side.querySelector('.duel-info').textContent = `${f.hp} HP · ${WEAPONS[f.weapon]?.name ?? ''}`;
+      side.querySelector('.duel-info').textContent = `${f.hp} HP · ${WEAPONS[f.weapon]?.name ?? ''}${match.practice || !Number.isFinite(f.potions) ? '' : ` · ยา ${f.potions}`}`;
     });
     renderStamina();
+    renderVignette(myFighter());
+    renderPotion();
+    renderPractice();
     ui.renderLockHint();
     ui.slots.forEach((el, i) => (el.querySelector('kbd').textContent = labelOf(i ? 'slot2' : 'slot1')));
     const f = myFighter();
@@ -756,6 +948,33 @@ export function createDuel(ctx) {
       el.querySelector('span').textContent = WEAPONS[f.loadout[i]].name;
       el.classList.toggle('is-active', i === f.slot);
     });
+  }
+
+  // ขอบจอแดง: เข้มขึ้นเรื่อยๆ ยิ่งเลือดน้อย · วิกฤต = เต้นเป็นจังหวะหัวใจ (ปิดถ้าเครื่องตั้งลดการเคลื่อนไหว — ทำใน CSS)
+  function renderVignette(f) {
+    const pct = inArena && f ? Math.max(0, f.hp) / HP_MAX : 1;
+    const level = pct < LOW_HP ? 1 - pct / LOW_HP : 0;
+    ui.vignette.style.opacity = level > 0 ? String(0.4 + 0.6 * level) : '0';
+    ui.vignette.classList.toggle('is-critical', level > 0 && pct <= CRITICAL_HP);
+  }
+  function renderPotion() {
+    const f = myFighter();
+    const n = f?.potions ?? 0;
+    ui.potion.querySelector('kbd').textContent = labelOf('heal');
+    ui.potion.querySelector('span').textContent = match?.practice ? 'ยา ∞' : `ยา ×${n}`;
+    ui.potion.classList.toggle('is-empty', !match?.practice && n <= 0);
+    ui.potion.classList.toggle('is-active', performance.now() < drinkUntil);
+  }
+  function renderPractice() {
+    const on = inArena && Boolean(match?.practice);
+    ui.practice.hidden = !on;
+    if (!on) return;
+    const weapon = myFighter()?.weapon;
+    for (const btn of ui.practice.children) {
+      const active = btn.dataset.kind === weapon;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    }
   }
 
   function renderStamina() {
@@ -792,7 +1011,9 @@ export function createDuel(ctx) {
       ui.slots.forEach((el, i) => (el.querySelector('.cd').style.transform = `scaleX(${i === f.slot ? left : 0})`));
     }
     if (now < flashUntil) return;
-    if (isStunned(now)) setStatus('มึน', true);
+    ui.potion.classList.toggle('is-active', now < drinkUntil);
+    if (now < drinkUntil) setStatus('กำลังดื่มยา… (เดินช้า ตีไม่ได้)', false);
+    else if (isStunned(now)) setStatus('มึน', true);
     else if (blocking) setStatus('ยกการ์ดอยู่ (เดินช้าลง)', false);
     else if (myStamina() < STAMINA.roll) setStatus('สตามินาไม่พอกลิ้ง รอฟื้นแป๊บ', true);
     else setStatus('', false);
@@ -833,6 +1054,9 @@ export function createDuel(ctx) {
         shots.delete(id);
       }
     }
+    tickFinisher(now);
+    // ส่งดื่มยาไปแล้ว server ไม่ตอบเลย (โดนจำกัดความถี่) → ถือว่าไม่ได้ดื่ม คืนขวดในเครื่อง
+    if (pendingDrink && now > drinkUntil + 400) cancelDrink();
     renderKit(now);
     updateLockRing(t);
     ui.lockHint.hidden = ctx.isLocked() || !ctx.isDesktop();
@@ -850,6 +1074,8 @@ export function createDuel(ctx) {
     close,
     pose,
     act,
+    healed,
+    cinematic,
     stamina: updateStamina,
     dodge,
     attack,
@@ -876,8 +1102,9 @@ export function createDuel(ctx) {
     // ยกการ์ด = เดินช้าลง · มึน = เดินไม่ได้
     moveScale: () => {
       if (!inArena) return 1;
-      if (isStunned(performance.now())) return 0;
-      return WEAPONS[myFighter()?.weapon ?? 'fists'].move * (blocking ? BLOCK_MOVE : 1);
+      const now = performance.now();
+      if (isStunned(now) || match?.phase === 'over') return 0; // จบแมตช์แล้วยืนนิ่ง (ท่าปิดเกมพาเดินเอง)
+      return WEAPONS[myFighter()?.weapon ?? 'fists'].move * (blocking ? BLOCK_MOVE : 1) * (now < drinkUntil ? POTION.move : 1);
     },
     toLocal,
   };

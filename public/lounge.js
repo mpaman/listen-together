@@ -173,7 +173,7 @@ function createTag(layer, name, isMe) {
   };
 }
 
-export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelSwap, onDuelAct }) {
+export function createLounge(container, { onPose, onGesture, onNotice, onPick, onDrop, onScreenQuad, onDuelPose, onDuelAttack, onDuelSwap, onDuelAct, onDuelPracticeWeapon }) {
   const canvas = container.querySelector('canvas');
   const layer = container.querySelector('.lounge-layer');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -670,6 +670,8 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
   const focus = new THREE.Vector3(0, 0, 1);
   const lookAt = new THREE.Vector3();
   function cameraGoal() {
+    const cine = duel?.cinematic();
+    if (cine) return [cine.x, cine.y, cine.z]; // ท่าปิดเกม: กล้องมองกึ่งกลางระหว่างสองคน
     const entry = me();
     return entry ? [entry.pos.x, entry.viewY, entry.pos.z] : [0, 0, 1];
   }
@@ -705,6 +707,14 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
     focus.x += (x - focus.x) * k;
     focus.y += (y - focus.y) * (1 - Math.exp(-dt * 3)); // กระโดดแล้วกล้องไม่เด้งตามแรงๆ
     focus.z += (z - focus.z) * k;
+    // ท่าปิดเกม: หมุนกล้องไปมองด้านข้าง (เห็นทั้งคนชนะและคนแพ้ในเฟรมเดียว) · เลือกฝั่งที่ใกล้มุมเดิมกว่า หมุนน้อยสุด
+    const cine = duel?.cinematic();
+    if (cine) {
+      const side = (yaw) => Math.atan2(Math.sin(yaw - camYaw), Math.cos(yaw - camYaw));
+      const a = side(cine.axis + Math.PI / 2);
+      const b = side(cine.axis - Math.PI / 2);
+      camYaw += (Math.abs(a) < Math.abs(b) ? a : b) * (1 - Math.exp(-dt * 3));
+    }
     shakeT = Math.max(0, shakeT - dt);
     placeCamera();
   }
@@ -937,6 +947,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       attack: (ry) => onDuelAttack?.({ ry }),
       swap: (slot) => onDuelSwap?.({ slot }),
       act: (type, on) => onDuelAct?.({ type, on }),
+      practiceWeapon: (kind) => onDuelPracticeWeapon?.({ kind }),
     },
     // ทิศปุ่มเดินที่กดอยู่ (เทียบมุมกล้อง) ไว้ให้กลิ้ง/แดชไปทางนั้น · ไม่กด = null
     moveDir: () => {
@@ -1231,6 +1242,7 @@ export function createLounge(container, { onPose, onGesture, onNotice, onPick, o
       act: (ev) => duel.act(ev),
       stamina: (values) => duel.stamina(values),
       dodge: (ev) => duel.dodge(ev),
+      healed: (ev) => duel.healed(ev),
       inArena: () => duel.inArena(),
     },
     toggleFullscreen: toggleCombatScreen,

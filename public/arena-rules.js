@@ -6,7 +6,7 @@ export const ARENA_HALF = 9; // ลานสี่เหลี่ยม 18 × 18
 export const HP_MAX = 100;
 export const COUNTDOWN_MS = 3000;
 export const FIGHT_MS = 90_000;
-export const RESULT_MS = 4000; // โชว์ผลแพ้ชนะก่อนส่งกลับลานฟังเพลง
+export const RESULT_MS = 5500; // โชว์ผลแพ้ชนะก่อนส่งกลับลานฟังเพลง (เผื่อท่าปิดเกม ~1.6 วิ ให้ดูจบก่อนป้ายผล)
 export const BODY_RADIUS = 0.35;
 export const BODY_HEIGHT = 1.9;
 
@@ -99,6 +99,9 @@ export const STAMINA = {
 export const DASH_ENABLED = false;
 // โล่ใหญ่: บล็อกได้ = โดน chip ดาเมจ · เสียสตามินา cost ต่อครั้ง (ท่าที่ทะลุบล็อก เช่น ค้อน เสียเพิ่มตาม pierce)
 export const SHIELD = { chip: 1, cost: 15 };
+// ยาเติมเลือด: แมตช์ละ 2 ขวด · ดื่มนาน (ระหว่างดื่มเดินช้า ตี/กลิ้ง/บล็อกไม่ได้) → ต้องหาจังหวะปลอดภัยก่อนดื่ม
+// เลือดเข้าตอนดื่มเสร็จ · โดนตีระหว่างดื่มไม่ยกเลิก (ขวดหมดไปแล้วตั้งแต่ยกดื่ม) · Man ขอ 11-28
+export const POTION = { count: 2, heal: 35, ms: 1600, move: 0.35 };
 export const ROLL_MS = 480; // กลิ้งทั้งท่า (ตีไม่ได้)
 export const ROLL_IFRAME_MS = 330; // ช่วงแรกของการกลิ้ง = โดนอะไรไม่เข้า
 export const ROLL_DIST = 3.4; // กลิ้งไปไกลกี่ m

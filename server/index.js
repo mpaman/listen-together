@@ -7,7 +7,7 @@ import { cleanGesture, cleanLook, cleanPose, createPerSecondLimiter, randomLook,
 import { startBotMatch, tickBot } from './duel-bot.js';
 import { createItemState, drop, groundList, pickUp, spawnTick } from './items.js';
 import {
-  act as duelAct, allWins, attack as duelAttack, createArena, forfeit, isFighter, joinQueue, leaveQueue, matchOf, swapWeapon,
+  act as duelAct, allWins, attack as duelAttack, createArena, forfeit, isFighter, joinQueue, leaveQueue, matchOf, setPracticeWeapon, swapWeapon,
   publicMatch, queueNames, setPose as setDuelPose, stepDuel, winsOf,
 } from './duel.js';
 import { appendChat, cleanChatText, createChatLimiter } from './chat.js';
@@ -254,6 +254,7 @@ function emitDuelEvents(roomId, room, events, now) {
     else if (ev.type === 'pose') fighters.volatile.emit('duel:pose', { id: ev.id, ...ev.pose });
     else if (ev.type === 'act') fighters.emit('duel:act', { id: ev.id, act: ev.act, on: ev.on, ms: ev.ms });
     else if (ev.type === 'dodge') fighters.emit('duel:dodge', ev);
+    else if (ev.type === 'healed') fighters.emit('duel:healed', ev);
   }
 }
 
@@ -623,14 +624,22 @@ io.on('connection', (socket) => {
     if (swapWeapon(match, socket.id, raw?.slot, now)) io.to(match.order).emit('duel:state', publicMatch(match, now));
   });
 
-  // ท่าป้องกัน/หลบ: block (ยก/ลดการ์ด) · roll (· dash ปิดไว้) → server เช็คสตามินา แล้วบอกทั้งสองคนให้เล่นท่า
+  // โหมดลองอาวุธ: เปลี่ยนอาวุธในมือเป็นชิ้นไหนก็ได้ (แมตช์จริงเปลี่ยนไม่ได้ · server เช็ค)
+  socket.on('duel:practiceWeapon', (raw) => {
+    const match = myMatch();
+    const now = Date.now();
+    if (!match || !allowGesture(now)) return;
+    if (setPracticeWeapon(match, socket.id, raw?.kind, now)) io.to(match.order).emit('duel:state', publicMatch(match, now));
+  });
+
+  // ท่าป้องกัน/หลบ: block (ยก/ลดการ์ด) · roll (· dash ปิดไว้) · heal (ดื่มยา) → server เช็ค แล้วบอกทั้งสองคนให้เล่นท่า
   socket.on('duel:act', (raw) => {
     const match = myMatch();
     const now = Date.now();
     if (!match || !allowAttack(now)) return;
     const res = duelAct(match, socket.id, raw?.type, now, raw?.on);
     if (res) io.to(match.order).emit('duel:act', { id: socket.id, ...res, stamina: Math.round(match.fighters[socket.id].stamina) });
-    else if (raw?.type === 'roll' || raw?.type === 'dash') socket.emit('duel:act', { id: socket.id, act: 'denied', stamina: Math.round(match.fighters[socket.id]?.stamina ?? 0) });
+    else if (raw?.type === 'roll' || raw?.type === 'dash' || raw?.type === 'heal') socket.emit('duel:act', { id: socket.id, act: 'denied', stamina: Math.round(match.fighters[socket.id]?.stamina ?? 0) });
   });
 
   socket.on('disconnect', () => {

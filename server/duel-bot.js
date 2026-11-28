@@ -2,7 +2,7 @@
 // ความยากต่างกันที่ "ความไวในการตอบสนอง / ความแม่นในการเล็ง / โอกาสหลบ / ความเร็ว" ไม่ได้โกงดาเมจ
 // ไม่แตะ socket: คืนเหตุการณ์ให้ index.js กระจาย เหมือน duel.js
 import { act, attack, createMatch, MAX_MATCHES, matchOf, swapWeapon } from './duel.js';
-import { BODY_RADIUS, clampArena, cleanLoadout, inPillar, ROLL_DIST, ROLL_MS, SLAM_DODGE_Y, STAMINA, WEAPON_KINDS, WEAPONS } from '../public/arena-rules.js';
+import { BODY_RADIUS, clampArena, cleanLoadout, inPillar, POTION, ROLL_DIST, ROLL_MS, SLAM_DODGE_Y, STAMINA, WEAPON_KINDS, WEAPONS } from '../public/arena-rules.js';
 
 // kits = ชุดอาวุธ (หลัก, รอง) ที่บอทระดับนั้นสุ่มใช้
 export const BOT_LEVELS = {
@@ -163,9 +163,15 @@ export function stepBot(match, botId, now, dt) {
       }
     }
     if (brain.rand() < 0.15) brain.strafe *= -1;
+    // เลือดน้อย + ไม่มีอะไรพุ่งมา + อยู่ห่างคู่ → ดื่มยา (ระหว่างดื่มเดินช้า ตีไม่ได้ เลยต้องห่างก่อน)
+    if (!danger && bot.hp <= 40 && dist > 4 && bot.potions > 0) {
+      const res = act(match, botId, 'heal', now);
+      if (res) events.push({ type: 'act', id: botId, ...res });
+    }
   }
 
-  const speed = (WALK + 1) * cfg.speed * WEAPONS[bot.weapon].move * (bot.blocking ? 0.5 : 1);
+  const drinking = now < bot.drinkUntil;
+  const speed = (WALK + 1) * cfg.speed * WEAPONS[bot.weapon].move * (bot.blocking ? 0.5 : 1) * (drinking ? POTION.move : 1);
   if (now < brain.dodgeUntil && brain.dodgeDir) {
     step(me, brain.dodgeDir.x, brain.dodgeDir.z, brain.rollSpeed || RUN * cfg.speed, dt);
   } else {

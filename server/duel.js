@@ -3,7 +3,7 @@
 // ฟังก์ชันในไฟล์นี้ไม่แตะ socket/เวลาเครื่อง: รับ now เข้ามา คืนรายการเหตุการณ์ ให้ index.js เป็นคนกระจาย
 import {
   ARENA_HALF, BLOCK_ARC, BODY_HEIGHT, BODY_RADIUS, clampArena, cleanLoadout, COUNTDOWN_MS, DASH_ENABLED, DASH_MS, FIGHT_MS, SHIELD,
-  HP_MAX, inPillar, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, STAMINA, SWAP_MS, WEAPONS,
+  HP_MAX, inPillar, POTION, RESULT_MS, ROLL_IFRAME_MS, ROLL_MS, SHOT_HEIGHT, SLAM_DODGE_Y, SPAWNS, STAMINA, SWAP_MS, WEAPON_KINDS, WEAPONS,
 } from '../public/arena-rules.js';
 
 const MAX_Y = 6; // กระโดดในลาน (พื้นเรียบ) สูงสุด ~1.3 m เผื่อไว้
@@ -68,7 +68,7 @@ export function createMatch(arena, pair, now, extra = {}) {
     const kit = cleanLoadout(loadout);
     fighters[id] = {
       id, name, side, hp: HP_MAX, loadout: kit, slot: 0, weapon: kit[0], readyAt: 0,
-      stamina: STAMINA.max, spentAt: 0, blocking: false, rollUntil: 0, stunUntil: 0,
+      stamina: STAMINA.max, spentAt: 0, blocking: false, rollUntil: 0, stunUntil: 0, potions: POTION.count, drinkUntil: 0,
       pose: { x: spawn.x, y: 0, z: spawn.z, ry: spawn.ry }, ...(look ? { look } : {}),
     };
   });
@@ -102,7 +102,7 @@ export function publicMatch(match, now) {
       const f = match.fighters[id];
       return {
         id, name: f.name, side: f.side, hp: f.hp, weapon: f.weapon, loadout: f.loadout, slot: f.slot,
-        stamina: Math.round(f.stamina), blocking: f.blocking, pose: f.pose, ...(f.look ? { look: f.look, npc: true } : {}),
+        stamina: Math.round(f.stamina), blocking: f.blocking, potions: f.potions, drinking: f.drinkUntil > now, pose: f.pose, ...(f.look ? { look: f.look, npc: true } : {}),
       };
     }),
     weapons: match.weapons,
@@ -149,8 +149,42 @@ function spend(f, cost, now) {
   f.stamina = Math.max(0, f.stamina - cost);
   f.spentAt = now;
 }
-// มึน หรือยังกลิ้งไม่จบท่า = ทำอย่างอื่นไม่ได้
-const busy = (f, now) => now < f.stunUntil || now < f.rollUntil + (ROLL_MS - ROLL_IFRAME_MS);
+// มึน / ยังกลิ้งไม่จบท่า / กำลังดื่มยา = ทำอย่างอื่นไม่ได้
+const busy = (f, now) => now < f.stunUntil || now < f.rollUntil + (ROLL_MS - ROLL_IFRAME_MS) || now < f.drinkUntil;
+
+// ดื่มยาเติมเลือด: ขวดหมดทันทีที่ยกดื่ม · เลือดเข้าตอนดื่มเสร็จ (stepMatch → finishDrinks)
+// โหมดลองอาวุธ: ขวดไม่ลด ลองได้เรื่อยๆ · เลือดเต็มแล้วไม่ให้ดื่ม (กันกดพลาดเสียขวด)
+function drink(match, f, now) {
+  if (busy(f, now) || f.potions <= 0 || f.hp >= HP_MAX) return null;
+  if (!match.practice) f.potions -= 1;
+  f.drinkUntil = now + POTION.ms;
+  f.drinkPending = true;
+  f.blocking = false;
+  return { act: 'heal', ms: POTION.ms, potions: f.potions };
+}
+function finishDrinks(match, now, events) {
+  for (const f of Object.values(match.fighters)) {
+    if (!f.drinkPending || now < f.drinkUntil) continue;
+    f.drinkPending = false;
+    const before = f.hp;
+    f.hp = Math.min(HP_MAX, f.hp + POTION.heal);
+    events.push({ type: 'healed', id: f.id, hp: f.hp, gain: f.hp - before, potions: f.potions });
+  }
+}
+
+// โหมดลองอาวุธ: เปลี่ยนอาวุธในมือเป็นชิ้นไหนก็ได้ระหว่างซ้อม (Man ขอ 11-28 ลองให้ครบทุกชิ้นโดยไม่ต้องออกจากลาน)
+// แทนช่องที่ถืออยู่ · ถ้าอีกช่องเป็นชิ้นนั้นอยู่แล้ว = สลับช่องกัน (สองช่องไม่ซ้ำกันเหมือนตอนเลือกก่อนเข้า)
+export function setPracticeWeapon(match, id, kind, now) {
+  const f = match?.fighters[id];
+  if (!f || !match.practice || match.phase !== 'fight' || !WEAPON_KINDS.includes(kind) || busy(f, now)) return null;
+  const other = 1 - f.slot;
+  if (f.loadout[other] === kind) f.loadout = f.slot === 0 ? [kind, f.loadout[0]] : [f.loadout[1], kind];
+  else f.loadout = f.loadout.map((k, i) => (i === f.slot ? kind : k));
+  f.weapon = kind;
+  f.blocking = false;
+  f.readyAt = Math.max(f.readyAt, now + SWAP_MS);
+  return { weapon: kind, slot: f.slot };
+}
 
 // คนเล่นกดท่า: block (on = ยก/ลดการ์ด) · roll · dash
 // คืน { act, on? } ให้ส่งต่อทุกเครื่องเล่นท่า หรือ null ถ้าทำไม่ได้ (สตามินาไม่พอ/กลิ้งอยู่)
@@ -164,6 +198,7 @@ export function act(match, id, type, now, on = true) {
     f.blocking = next;
     return { act: 'block', on: next };
   }
+  if (type === 'heal') return drink(match, f, now);
   const cost = { roll: STAMINA.roll, ...(DASH_ENABLED ? { dash: STAMINA.dash } : {}) }[type];
   if (cost === undefined || busy(f, now) || f.stamina < cost) return null;
   spend(f, cost, now);
@@ -353,6 +388,7 @@ function stepMatch(arena, match, now, dt) {
   }
   if (match.phase === 'fight') {
     regen(match, now, dt);
+    finishDrinks(match, now, events);
     resolvePending(match, now, events);
     moveShots(match, dt, now, events);
     if (match.phase === 'fight' && !match.practice && now - match.phaseAt >= FIGHT_MS) {

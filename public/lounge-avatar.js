@@ -158,14 +158,36 @@ const GESTURE_SEC = { jump: 0.8, punch: 0.4, wave: 1.6, dance: 2.4, clap: 1.4, h
 Object.assign(GESTURE_SEC, { jab: 0.3, slash: 0.45, stab: 0.5, slam: 1, shoot: 0.6, cast: 0.75, flinch: 0.3 });
 // ท่าหลบในลาน: กลิ้ง (แดชปิดไว้ แต่เก็บท่าไว้เผื่อเปิดกลับ)
 Object.assign(GESTURE_SEC, { roll: 0.48, dash: 0.25 });
+// ดื่มยา (ยาวตาม POTION.ms ที่ส่งมา) · ท่าปิดเกมของผู้ชนะ · ล้มน็อกของผู้แพ้ (ค้างท่าจนปิดลาน)
+Object.assign(GESTURE_SEC, { drink: 1.6, finisher: 1.5, ko: 0.9 });
 // ท่าที่ค่อยๆ ผสมเข้า/ออกจากท่าเดิน (ไม่งั้นแขนวาร์ปจากท่าเดินไปท่าตีในเฟรมเดียว ดูแข็ง)
 // ท่าหมุนรอบตัว (เต้น) ไม่ผสม เพราะผสมตอนจบจะหมุนย้อนกลับ
-const BLEND_IN = new Set(['jab', 'slash', 'stab', 'slam', 'shoot', 'cast', 'punch', 'flinch', 'wave', 'clap']);
+const BLEND_IN = new Set(['jab', 'slash', 'stab', 'slam', 'shoot', 'cast', 'punch', 'flinch', 'wave', 'clap', 'drink']);
 const BLEND_IN_SEC = 0.07;
 const BLEND_OUT_SEC = 0.14;
 const ease = (t) => t * t * (3 - 2 * t); // smoothstep: ออกตัวช้า เร่ง แล้วค่อยหยุด
 
 const pulse = (t) => Math.sin(Math.PI * Math.min(1, Math.max(0, t))); // 0 → 1 → 0
+
+// ขวดยาเติมเลือดแบบ voxel (ขวดแก้วใส น้ำยาเขียว จุกไม้) · ติดที่ปลายแขนซ้ายตอนดื่ม
+const BOTTLE_GLASS = new THREE.MeshLambertMaterial({ color: 0xc0e8f0, transparent: true, opacity: 0.55 });
+const BOTTLE_LIQUID = new THREE.MeshLambertMaterial({ color: 0x4ade80, emissive: 0x14532d });
+const BOTTLE_CORK = new THREE.MeshLambertMaterial({ color: 0x8b5a2b });
+function buildBottle() {
+  const g = new THREE.Group();
+  const part = (w, h, d, mat, y) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.y = y;
+    g.add(m);
+  };
+  part(0.14, 0.16, 0.14, BOTTLE_GLASS, 0);
+  part(0.11, 0.12, 0.11, BOTTLE_LIQUID, -0.015);
+  part(0.06, 0.07, 0.06, BOTTLE_GLASS, 0.11);
+  part(0.07, 0.04, 0.07, BOTTLE_CORK, 0.16);
+  g.position.set(0, -0.5, 0.08);
+  g.rotation.x = Math.PI; // ปากขวดชี้ลงตามแขน → ยกแขนขึ้นแล้วปากขวดหันเข้าปาก
+  return g;
+}
 
 export function createAvatar(look) {
   const root = new THREE.Group(); // ตำแหน่งบนพื้น + ทิศที่หัน
@@ -267,11 +289,28 @@ export function createAvatar(look) {
     squash = Math.max(squash, 0.35 + strength * 0.65);
   }
 
+  // ขวดยาในมือซ้าย: โผล่เฉพาะตอนดื่ม (สร้างครั้งแรกที่ใช้ · มีดคู่มือซ้ายซ่อนไว้ก่อนระหว่างดื่ม)
+  let bottle = null;
+  function setBottle(on) {
+    if (on && !bottle) bottle = buildBottle();
+    if (bottle) {
+      if (on) parts.armL.add(bottle);
+      else bottle.removeFromParent();
+    }
+    if (parts.heldL) parts.heldL.visible = !on;
+  }
+
   // sec = ความยาวท่า · hitAt = วินาทีที่อาวุธโดนจริง (ท่าง้างยาวเท่านี้แล้วค่อยปล่อย)
-  function play(type, { sec, hitAt } = {}) {
+  // hold = เล่นจบแล้วค้างท่าสุดท้ายไว้ (ล้มน็อก) จนกว่าจะเล่นท่าอื่นหรือเรียก stop()
+  function play(type, { sec, hitAt, hold = false } = {}) {
     if (!GESTURE_SEC[type]) return;
     const dur = sec ?? GESTURE_SEC[type];
-    gesture = { type, t: 0, dur, hit: hitAt !== undefined ? Math.min(0.85, hitAt / dur) : 0.35 };
+    gesture = { type, t: 0, dur, hold, hit: hitAt !== undefined ? Math.min(0.85, hitAt / dur) : 0.35 };
+    setBottle(type === 'drink');
+  }
+  function stop() {
+    gesture = null;
+    setBottle(false);
   }
 
   // โดนตี: ตัวกะพริบขาวแป๊บนึง (เฉพาะตัว ไม่รวมของในมือ เพราะวัสดุของในมือใช้ร่วมกันทุกตัว)
@@ -504,6 +543,40 @@ export function createAvatar(look) {
         parts.legR.rotation.x = 0.5 * k;
         break;
       }
+      case 'drink': { // ดื่มยา: ยกขวดมือซ้ายขึ้นปาก เงยหน้า อึกๆ แล้วลดแขนลง (ขาเดินต่อได้ ช้าลง)
+        const k = ease(Math.min(1, p / 0.2)) * (1 - ease(Math.max(0, (p - 0.85) / 0.15)));
+        parts.armL.rotation.set(-2.5 * k, 0, 0.55 * k);
+        parts.head.rotation.x = -0.35 * k + 0.05 * Math.sin(gesture.t * 14) * k;
+        body.rotation.x += -0.08 * k;
+        break;
+      }
+      case 'finisher': { // ท่าปิดเกม: ย่อ → กระโดดหมุนตัว ยกอาวุธเหนือหัว → ทุบลงเต็มแรง → ค่อยๆ ยืดตัว
+        const s = Math.min(1, Math.max(0, (p - 0.2) / 0.45));
+        const air = p >= 0.2 && p <= 0.65 ? Math.sin(Math.PI * s) : 0;
+        const crouch = p < 0.2 ? pulse(p / 0.2) : p > 0.65 ? 1 - ease(Math.min(1, (p - 0.65) / 0.35)) : 0;
+        const raise = ease(Math.min(1, Math.max(0, (p - 0.1) / 0.3)));
+        const smash = ease(Math.min(1, Math.max(0, (p - 0.58) / 0.1)));
+        const recover = ease(Math.max(0, (p - 0.85) / 0.15));
+        const armX = (-3 * raise * (1 - smash) - 1.3 * smash) * (1 - recover);
+        parts.armR.rotation.set(armX, 0, 0.1);
+        parts.armL.rotation.set(armX, 0, -0.1);
+        body.position.y += 0.9 * air - 0.18 * crouch;
+        body.rotation.y += Math.PI * 2 * ease(s);
+        body.rotation.x = 0.45 * smash * (1 - recover) - 0.15 * air;
+        parts.legL.rotation.x = parts.legR.rotation.x = -0.8 * air - 0.4 * crouch;
+        break;
+      }
+      case 'ko': { // ล้มน็อก: เซไปหลัง ล้มหงายนอนราบ แขนกาง (ค้างไว้ · hold)
+        const k = ease(Math.min(1, p / 0.75));
+        const bounce = p > 0.75 ? Math.sin(Math.PI * Math.min(1, (p - 0.75) / 0.25)) * 0.06 : 0;
+        body.rotation.x = -1.45 * k;
+        body.position.y += 0.15 * k + bounce;
+        parts.armL.rotation.set(-0.3 * k, 0, -1.2 * k);
+        parts.armR.rotation.set(-0.3 * k, 0, 1.2 * k);
+        parts.head.rotation.x = 0.2 * k;
+        parts.legL.rotation.x = parts.legR.rotation.x = 0;
+        break;
+      }
       case 'flinch': // โดนตี: สะดุ้งไปหลัง
         body.rotation.x = -0.35 * Math.sin(Math.PI * p);
         parts.head.rotation.x = -0.3 * Math.sin(Math.PI * p);
@@ -578,7 +651,10 @@ export function createAvatar(look) {
         });
       }
     }
-    if (p >= 1) gesture = null;
+    if (p >= 1) {
+      if (gesture.hold) gesture.t = dur; // ค้างท่าสุดท้าย
+      else stop();
+    }
   }
   // ส่วนของตัวที่ท่าต่างๆ ขยับ (ไว้จำ/ผสมท่า)
   const posed = () => [parts.armL.rotation, parts.armR.rotation, parts.head.rotation, body.rotation, body.position];
@@ -587,6 +663,7 @@ export function createAvatar(look) {
     root,
     update,
     play,
+    stop,
     setLook: build,
     setHeld,
     setGuard,
