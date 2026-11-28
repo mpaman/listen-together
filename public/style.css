@@ -906,7 +906,17 @@ a.room-btn { text-decoration: none; }
 .emo[data-gesture="party"]:hover, .emo[data-gesture="clap"]:hover { color: var(--amber); }
 .act:hover, .emo:hover { background: var(--surface-2); border-color: var(--line-strong); }
 .act:active, .emo:active { transform: scale(0.9); }
-.emotes { display: flex; flex-wrap: wrap; gap: 6px; }
+.emotes { position: relative; display: flex; flex-wrap: wrap; gap: 6px; }
+/* อีโมตครั้งเดียว 8 อันพับเข้าแผงเล็ก (Man 11-28: แถบล่างแน่นเกิน) · ท่าค้าง 3 อันยังอยู่บนแถบเพราะกดบ่อย
+   แผงลอยเหนือปุ่มทับฉาก ไม่ดันแถบ · 4×2 ช่อง */
+.emote-pop {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 20;
+  display: grid; grid-template-columns: repeat(4, 38px); gap: 6px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.45);
+}
+.emote-pop[hidden] { display: none; }
+.emote-toggle[aria-expanded="true"] { color: var(--text); background: var(--surface-2); border-color: var(--line-strong); }
 /* ท่าค้าง (นั่งพื้น/นอน/ไหว้): ค้างอยู่ = ขอบส้ม + ไอคอนสว่าง (ไม่ใช้สีอย่างเดียว · aria-pressed บอกโปรแกรมอ่านจอ) */
 .emo[aria-pressed="true"] { color: var(--text); background: var(--surface-2); border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
 .emo-sep { width: 1px; align-self: stretch; margin: 6px 2px; background: var(--line-strong); } /* อีโมตเป็นกลุ่มเดียว: ไม่พอที่ก็ขึ้นบรรทัดใหม่ทั้งกลุ่ม */

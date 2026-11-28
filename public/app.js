@@ -500,6 +500,7 @@ async function initLounge() {
   for (const btn of document.querySelectorAll('.lounge-actions [data-gesture]')) {
     btn.addEventListener('click', () => lounge.gesture(btn.dataset.gesture));
   }
+  bindEmotePop();
   document.querySelector('.lounge-actions [data-act="sit"]').addEventListener('click', () => lounge.toggleSit());
   for (const btn of document.querySelectorAll('.lounge-actions [data-rest]')) {
     btn.addEventListener('click', () => lounge.toggleRest(btn.dataset.rest));
@@ -885,3 +886,29 @@ async function main() {
 }
 
 main();
+
+// แผงอีโมต: เปิด/ปิดจากปุ่มหน้ายิ้ม · เลือกแล้วปิด (อีโมตเล่นครั้งเดียว) · Esc / คลิกที่อื่น = ปิด
+// Esc คืนโฟกัสให้ปุ่มเปิด คนใช้คีย์บอร์ดจะได้ไม่หลง
+function bindEmotePop() {
+  const toggle = document.getElementById('emote-toggle');
+  const pop = document.getElementById('emote-pop');
+  if (!toggle || !pop) return;
+  const setOpen = (open) => {
+    pop.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) pop.querySelector('button')?.focus();
+  };
+  toggle.addEventListener('click', () => setOpen(pop.hidden));
+  pop.addEventListener('click', (e) => {
+    if (e.target.closest('[data-gesture]')) setOpen(false);
+  });
+  pop.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    setOpen(false);
+    toggle.focus();
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!pop.hidden && !pop.contains(e.target) && !toggle.contains(e.target)) setOpen(false);
+  });
+}
