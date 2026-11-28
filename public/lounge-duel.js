@@ -613,8 +613,15 @@ export function createDuel(ctx) {
     if (inArena) {
       // ป้ายผลกลางจอใช้ภาษาอังกฤษแบบเกมต่อสู้ (Man ขอ) · ข้อความแจ้งในแชทยังเป็นไทย
       const whyEn = { ko: 'K.O.!', time: 'TIME UP', left: 'OPPONENT LEFT' }[ev.reason] ?? '';
-      const text = ev.winner === null ? 'DRAW' : ev.winnerId === ctx.myId() ? 'YOU WIN! 🏆' : 'YOU LOSE';
-      const result = () => showBanner(`${text}\n${whyEn}${wins ? `\nWINS: ${wins}` : ''}`, 0, ev.winnerId === ctx.myId() ? 'is-win' : 'is-lose');
+      const text = ev.winner === null ? 'DRAW' : ev.winnerId === ctx.myId() ? 'YOU WIN' : 'YOU LOSE';
+      // ป้ายผลแบบเล็ก: บรรทัดเดียวใต้แถบเลือด + จำนวนชนะตัวเล็ก (Man 11-28: ป้ายเดิมใหญ่ บังฉากท่าปิดเกม)
+      const result = () => {
+        showBanner(whyEn ? `${text} · ${whyEn}` : text, 0, `is-result ${ev.winnerId === ctx.myId() ? 'is-win' : 'is-lose'}`);
+        if (!wins) return;
+        const small = document.createElement('small');
+        small.textContent = `WINS ${wins}`;
+        ui.banner.append(small);
+      };
       // น็อก = เล่นท่าปิดเกมก่อน แล้วค่อยขึ้นป้ายผล · หมดเวลา/อีกฝ่ายออก = ขึ้นป้ายเลย
       const loseId = fighterIds().find((id) => id !== ev.winnerId);
       if (!(ev.reason === 'ko' && ev.winnerId && startFinisher(ev.winnerId, loseId, result))) result();
